@@ -1,0 +1,168 @@
+{
+  "siteConfig": {
+    "phone": "5511987049051",
+    "phoneAux": "5511993344293",
+    "email": "atendimento.spassessoria@gmail.com",
+    "cnpj": "67.851.115/0001-60",
+    "instagram": "spra.assessoria",
+    "heroTitle": "SP Assessoria de Recursos",
+    "heroTitleAccent": "Administrativos",
+    "heroSubtitle": "“Soluções administrativas com agilidade, segurança e compromisso.”",
+    "heroDescription": "Recursos contra negativas do INSS, defesas de pontuação e suspensão de CNH, e requerimentos administrativos em órgãos públicos federais, estaduais e municipais."
+  },
+  "services": {
+    "inss": {
+      "title": "INSS & Previdenciário",
+      "description": "Análise estratégica e recursos contra indeferimentos de benefícios no INSS. Atuamos com foco estritamente administrativo para agilizar sua concessão.",
+      "items": [
+        "Recursos Administrativos contra indeferimentos",
+        "Defesa e justificativa em benefícios negados",
+        "Revisões de benefícios na esfera administrativa",
+        "Cumprimento de exigências com agilidade",
+        "Acompanhamento diário e monitoramento de processos",
+        "BPC/LOAS (fase administrativa completa)",
+        "Protocolos diversos e requerimentos de aposentadoria"
+      ]
+    },
+    "transito": {
+      "title": "Trânsito & CNH",
+      "description": "Defesa técnica de condutores perante órgãos de trânsito (DETRAN, JARI, CETRAN). Proteja seu direito de dirigir sem burocracia.",
+      "items": [
+        "Defesa Prévia técnica fundamentada",
+        "Recurso de Multas graves, gravíssimas e suspensivas",
+        "Recurso contra Processo de Suspensão da CNH",
+        "Recurso contra Cassação do Direito de Dirigir",
+        "Defesa em Processo Administrativo de Trânsito geral"
+      ]
+    },
+    "administrativo": {
+      "title": "Serviços Administrativos",
+      "description": "Soluções corporativas e individuais em órgãos públicos, cuidando de toda a parte burocrática e documental com segurança jurídica.",
+      "items": [
+        "Protocolos administrativos diversos em repartições públicas",
+        "Elaboração de requerimentos formais fundamentados",
+        "Consultoria administrativa documental preventiva",
+        "Análise minuciosa de documentos e certidões"
+      ]
+    }
+  },
+  "faqs": [
+    {
+      "id": "faq-1",
+      "question": "Posso resolver todo o meu processo de forma 100% online?",
+      "answer": "Sim! Hoje todos os processos perante o INSS (via Meu INSS) e a maioria dos órgãos de trânsito (como DETRANs e JARI) são digitais. Coletamos sua assinatura digital e os documentos necessários de forma prática pelo celular. Você não precisa se deslocar nem pegar filas."
+    },
+    {
+      "id": "faq-2",
+      "question": "Quanto tempo demora para meu recurso ser elaborado e protocolado?",
+      "answer": "Após o recebimento de toda a documentação solicitada e confirmação do pagamento, nossa equipe elabora e protocoliza seu recurso ou requerimento administrativo em um prazo de 2 a 5 dias úteis."
+    },
+    {
+      "id": "faq-3",
+      "question": "Como funciona o pagamento dos serviços?",
+      "answer": "Trabalhamos com formas de pagamento flexíveis para melhor atender você. Aceitamos PIX, transferência bancária e parcelamento no cartão de crédito. Fornecemos contrato de prestação de serviços administrativo para sua segurança."
+    },
+    {
+      "id": "faq-4",
+      "question": "Vocês garantem o resultado positivo do processo?",
+      "answer": "Perante as leis brasileiras, a decisão final sobre qualquer recurso administrativo é de competência exclusiva do órgão julgador (como o conselho de recursos do INSS ou a JARI). No entanto, garantimos aplicar a melhor técnica jurídica, jurisprudência recente e fundamentação personalizada para maximizar suas chances de êxito."
+    },
+    {
+      "id": "faq-5",
+      "question": "Quais documentos são necessários para iniciar o meu atendimento?",
+      "answer": "Varia de acordo com o serviço. Para INSS, geralmente CPF, comprovante de residência e extrato CNIS ou carta de indeferimento. Para trânsito, a CNH e a notificação de autuação da multa. Nossa equipe indicará a lista exata após a pré-análise do caso."
+    }
+  ],
+  "blogPosts": [
+    {
+      "id": "post-1",
+      "title": "Como Recorrer de uma Multa de Trânsito Indevida Passo a Passo",
+      "category": "Trânsito",
+      "date": "05 de Julho, 2026",
+      "readTime": "5 min de leitura",
+      "summary": "Entenda as etapas fundamentais para estruturar uma defesa prévia e recursos perante a JARI e o CETRAN.",
+      "content": "Muitos condutores acreditam que recorrer de uma multa de trânsito é perda de tempo, mas isso é um mito. Erros formais cometidos pelo agente de trânsito ou pelo órgão autuador são muito comuns e anulam a infração na hora.\n\nPara recorrer, primeiro fique atento à data limite expressa na Notificação de Autuação para apresentar a Defesa Prévia. Se houver falhas no preenchimento da autuação (como data errada, endereço inexistente ou ausência de informações obrigatórias do veículo), a multa deve ser arquivada.\n\nSe a defesa prévia for indeferida, o próximo passo é o Recurso em 1ª Instância para a JARI (Junta Administrativa de Recursos de Infrações). Nesta fase, deve-se discutir o mérito da infração com base no Código de Trânsito Brasileiro (CTB). Por fim, se necessário, há a 2ª Instância junto ao CETRAN. Conte com uma assessoria especializada para redigir sua defesa técnica e aumentar drasticamente suas chances de anular multas ou pontuações que ameaçam sua CNH.",
+      "imageUrl": "https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&w=600&q=80"
+    },
+    {
+      "id": "post-2",
+      "title": "Entenda o BPC/LOAS: Quem Tem Direito e Como Funciona a Solicitação",
+      "category": "INSS",
+      "date": "28 de Junho, 2026",
+      "readTime": "6 min de leitura",
+      "summary": "Descubra os requisitos de renda e deficiência para requerer o Benefício de Prestação Continuada diretamente no INSS.",
+      "content": "O Benefício de Prestação Continuada (BPC), regulamentado pela Lei Orgânica da Assistência Social (LOAS), garante um salário mínimo mensal para pessoas com deficiência de qualquer idade ou para idosos a partir de 65 anos.\n\nPara ter direito ao BPC, o requisito chave é que a renda por pessoa do grupo familiar seja igual ou inferior a 1/4 do salário mínimo vigente. Além disso, é obrigatório estar inscrito no Cadastro Único (CadÚnico) e manter os dados atualizados nos últimos dois anos.\n\nNo caso da pessoa com deficiência, haverá avaliação médica e social realizada por peritos do INSS para comprovar o impedimento de longo prazo (mínimo de 2 anos). Caso seu benefício seja indeferido pelo INSS sob a alegação de renda superior ou ausência de deficiência, saiba que é possível ingressar com recurso administrativo fundamentado demonstrando despesas com medicamentos e a real vulnerabilidade social, sem precisar de ação judicial imediata.",
+      "imageUrl": "https://images.unsplash.com/photo-1573164713714-d95e436ab8d6?auto=format&fit=crop&w=600&q=80"
+    },
+    {
+      "id": "post-3",
+      "title": "Guia Prático: Como Acompanhar seu Processo Administrativo no INSS",
+      "category": "INSS",
+      "date": "15 de Junho, 2026",
+      "readTime": "4 min de leitura",
+      "summary": "Veja como utilizar o portal Meu INSS de forma eficiente para monitorar exigências e prazos de análise.",
+      "content": "Acompanhar de perto o andamento do seu requerimento no INSS é crucial para evitar o arquivamento do processo por perda de prazos. Sempre que o INSS necessitar de mais documentos, ele emitirá uma 'Exigência'.\n\nVocê pode acompanhar tudo pelo aplicativo ou site 'Meu INSS' na seção 'Consultar Pedidos'. Ao clicar no seu processo, você poderá ver o histórico de movimentações e baixar a cópia do processo administrativo completo em PDF.\n\nSe o status estiver 'Em exigência', você terá um prazo (geralmente de 30 dias) para anexar os documentos solicitados. O não cumprimento da exigência no prazo legal resulta no indeferimento ou arquivamento do seu pedido. Caso encontre dificuldades em organizar os documentos corretos, uma assessoria administrativa especializada pode realizar todo o protocolo e anexação das provas de maneira técnica, garantindo a análise correta pelo analista do INSS.",
+      "imageUrl": "https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=600&q=80"
+    },
+    {
+      "id": "post-4",
+      "title": "Direitos do Cidadão contra Abusos de Órgãos Públicos",
+      "category": "Direitos",
+      "date": "02 de Junho, 2026",
+      "readTime": "4 min de leitura",
+      "summary": "Seus direitos fundamentais previstos na Lei do Processo Administrativo Federal (Lei 9.784/99).",
+      "content": "A administração pública deve pautar seus atos sob os princípios da legalidade, impessoalidade, moralidade, publicidade e eficiência. Todo cidadão tem o direito de ser tratado com respeito pelas autoridades e servidores públicos.\n\nA Lei nº 9.784/99 assegura que o cidadão tem o direito de ter ciência da tramitação dos processos administrativos em que tenha a condição de interessado, ter vista dos autos no órgão público, obter cópias de documentos e apresentar alegações e provas antes de qualquer decisão.\n\nAlém disso, os órgãos públicos possuem prazos legais rígidos para responder aos seus pedidos. A demora excessiva e injustificada na análise de uma aposentadoria ou licença viola o princípio da eficiência, gerando direito a reclamações na Ouvidoria, recursos de mora administrativa ou mandados de segurança administrativa. Conhecer seus direitos é a maior arma contra a burocracia estatal indevida.",
+      "imageUrl": "https://images.unsplash.com/photo-1589829545856-d10d557cf95f?auto=format&fit=crop&w=600&q=80"
+    }
+  ],
+  "reviews": [
+    {
+      "id": "rev-1",
+      "author": "Carlos Alberto de Souza",
+      "stars": 5,
+      "date": "14 de Junho, 2026",
+      "serviceType": "Recurso de CNH Suspensa",
+      "text": "Excelente assessoria! Estava prestes a perder minha CNH por excesso de pontos e preciso dela para trabalhar. Fizeram uma defesa técnica fantástica e conseguimos anular o processo de suspensão de forma totalmente administrativa. Super recomendo a SP Assessoria."
+    },
+    {
+      "id": "rev-2",
+      "author": "Maria de Lourdes Silva",
+      "stars": 5,
+      "date": "29 de Maio, 2026",
+      "serviceType": "BPC / LOAS",
+      "text": "Tive meu pedido de BPC negado pelo INSS por causa de um detalhe no Cadastro Único. A SP Assessoria fez uma análise de todos os meus papéis, reuniu as receitas médicas, montou o recurso certinho e em menos de 45 dias meu benefício foi aprovado! Gratidão imensa pelo carinho e rapidez."
+    },
+    {
+      "id": "rev-3",
+      "author": "Roberto Mendes Filho",
+      "stars": 5,
+      "date": "11 de Abril, 2026",
+      "serviceType": "Recurso de Multa Gravíssima",
+      "text": "Fui multado injustamente por uma infração que não cometi na rodovia. A equipe da SP preparou o recurso administrativo apontando erros no radar e o CETRAN deu provimento ao meu recurso. Transparência nota 10."
+    }
+  ],
+  "leads": [
+    {
+      "id": "lead-1",
+      "name": "Mariana de Oliveira Costa",
+      "email": "mariana.costa@gmail.com",
+      "phone": "(11) 98123-4567",
+      "service": "INSS Previdenciário",
+      "message": "Gostaria de recorrer do meu benefício de auxílio-doença que foi indeferido na perícia médica semana passada. Tenho todos os laudos médicos em mãos.",
+      "date": "08/07/2026, 09:12",
+      "status": "Novo",
+      "type": "Contato"
+    },
+    {
+      "id": "lead-2",
+      "name": "Renato de Souza Ramos",
+      "email": "renato.ramos@hotmail.com",
+      "phone": "(21) 99876-5432",
+      "service": "Trânsito Multas",
+      "message": "Recebi uma notificação de suspensão do direito de dirigir por ter acumulado 42 pontos na carteira de motorista. Trabalho como motorista de aplicativo e preciso de ajuda com urgência.",
+      "date": "07/07/2026, 16:45",
+      "status": "Em Atendimento",
+      "type": "Orçamento"
+    }
+  ]
+}

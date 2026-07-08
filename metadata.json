@@ -1,0 +1,6 @@
+{
+  "name": "SP Assessoria",
+  "description": "Assessoria de Recursos Administrativos especializada em INSS, infrações de trânsito e processos administrativos com transparência, agilidade e segurança.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
