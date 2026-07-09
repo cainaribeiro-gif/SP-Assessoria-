@@ -104,11 +104,14 @@ async function startServer() {
   // API endpoint for admin login authentication
   app.post("/api/admin/login", (req, res) => {
     const { username, password } = req.body;
-    // Predefined secure administrator credentials for demonstration/access
-    if (username === "admin" && password === "spassessoria2026") {
+    // Predefined secure administrator credentials for live production access
+    if (
+      (username === "atendimento@sprecursosadm.com.br" && password === "@Shafiraepablo") ||
+      (username === "admin" && password === "@Shafiraepablo")
+    ) {
       res.json({ success: true, token: "sp_admin_token_2026_secured" });
     } else {
-      res.status(401).json({ error: "Usuário ou senha incorretos." });
+      res.status(401).json({ error: "E-mail ou senha incorretos." });
     }
   });
 

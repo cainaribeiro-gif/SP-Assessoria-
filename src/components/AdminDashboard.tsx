@@ -301,7 +301,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
 
               <form onSubmit={handleLogin} className="space-y-4">
                 <div>
-                  <label className="block text-[10px] text-gray-500 font-bold uppercase tracking-wider text-left mb-1">Usuário</label>
+                  <label className="block text-[10px] text-gray-500 font-bold uppercase tracking-wider text-left mb-1">E-mail de Acesso</label>
                   <div className="relative">
                     <User className="absolute left-3 top-3 w-4 h-4 text-gray-450" />
                     <input
@@ -309,7 +309,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                       required
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      placeholder="Ex: admin"
+                      placeholder="Ex: atendimento@sprecursosadm.com.br"
                       className="w-full bg-gray-50 border border-gray-250 text-gray-800 rounded-lg pl-10 pr-4 py-2.5 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
                     />
                   </div>
@@ -337,13 +337,6 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                   Entrar no Sistema
                 </button>
               </form>
-
-              {/* DEMO NOTICE */}
-              <div className="p-3 bg-brand-gold-50 border border-brand-gold-200/50 rounded-xl text-left text-[10px] text-brand-gold-800">
-                <span className="font-bold block mb-0.5">🔑 Credenciais de Demonstração:</span>
-                <div>Usuário: <code className="font-mono bg-white px-1 py-0.5 rounded border border-brand-gold-200">admin</code></div>
-                <div className="mt-0.5">Senha: <code className="font-mono bg-white px-1 py-0.5 rounded border border-brand-gold-200">spassessoria2026</code></div>
-              </div>
             </div>
           </div>
         ) : (
