@@ -259,24 +259,41 @@ const MOCK_PROTOCOLS: Record<string, ProcessStatus> = {
 };
 
 export default function App() {
-  // Dynamic Site Data State from Express API
-  const [siteData, setSiteData] = useState<any>(defaultSiteData);
+  // Dynamic Site Data State with localStorage fallback for static hosting
+  const [siteData, setSiteData] = useState<any>(() => {
+    const saved = localStorage.getItem("sp_site_data");
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        return defaultSiteData;
+      }
+    }
+    return defaultSiteData;
+  });
   const [adminOpen, setAdminOpen] = useState(false);
 
   const fetchSiteData = async () => {
     try {
       const response = await fetch("/api/site-data");
       if (response.ok) {
-        const data = await response.json();
-        setSiteData(data);
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const data = await response.json();
+          setSiteData(data);
+          localStorage.setItem("sp_site_data", JSON.stringify(data));
+        }
       }
     } catch (error) {
-      console.error("Erro ao buscar dados do servidor:", error);
+      console.warn("Erro ao buscar dados do servidor, usando dados locais:", error);
     }
   };
 
   const saveSiteData = async (newData: any) => {
     try {
+      localStorage.setItem("sp_site_data", JSON.stringify(newData));
+      setSiteData(newData);
+      
       const response = await fetch("/api/site-data", {
         method: "POST",
         headers: {
@@ -286,13 +303,12 @@ export default function App() {
         body: JSON.stringify(newData)
       });
       if (response.ok) {
-        setSiteData(newData);
         return true;
       }
-      return false;
+      return true; // Return true because it's locally saved
     } catch (error) {
-      console.error("Erro ao salvar dados no servidor:", error);
-      return false;
+      console.warn("Erro ao salvar dados no servidor, mantendo localmente:", error);
+      return true; // Return true because it's locally saved
     }
   };
 
@@ -421,23 +437,34 @@ export default function App() {
     e.preventDefault();
     if (!contactName || !contactPhone) return;
 
+    const leadData = {
+      id: `lead-${Date.now()}`,
+      name: contactName,
+      email: contactEmail,
+      phone: contactPhone,
+      service: contactService,
+      message: contactMessage,
+      type: "Contato",
+      status: "Novo",
+      date: new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })
+    };
+
+    // Store lead locally immediately for static hosts
+    const updatedLeads = [leadData, ...(siteData.leads || [])];
+    const updatedData = { ...siteData, leads: updatedLeads };
+    setSiteData(updatedData);
+    localStorage.setItem("sp_site_data", JSON.stringify(updatedData));
+
     // Submit lead to our database API
     fetch("/api/leads", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: contactName,
-        email: contactEmail,
-        phone: contactPhone,
-        service: contactService,
-        message: contactMessage,
-        type: "Contato"
-      })
+      body: JSON.stringify(leadData)
     })
     .then(() => {
       fetchSiteData(); // Refresh local list
     })
-    .catch(err => console.error("Erro ao registrar lead de contato:", err));
+    .catch(err => console.warn("Erro ao registrar lead de contato no servidor, mantido localmente:", err));
 
     setContactSuccess(true);
     const phone = siteConfigData.phone;
@@ -1867,6 +1894,12 @@ export default function App() {
       <BudgetModal 
         isOpen={budgetModalOpen} 
         onClose={() => setBudgetModalOpen(false)} 
+        onLeadAdded={(newLead) => {
+          const updatedLeads = [newLead, ...(siteData.leads || [])];
+          const updatedData = { ...siteData, leads: updatedLeads };
+          setSiteData(updatedData);
+          localStorage.setItem("sp_site_data", JSON.stringify(updatedData));
+        }}
       />
 
       <LegalModal 

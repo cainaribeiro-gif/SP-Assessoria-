@@ -4,6 +4,7 @@ import { X, Calculator, ArrowRight, CheckCircle2, ChevronRight } from "lucide-re
 interface BudgetModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onLeadAdded?: (lead: any) => void;
 }
 
 const SERVICES_CONFIG = {
@@ -33,7 +34,7 @@ const SERVICES_CONFIG = {
   }
 };
 
-export function BudgetModal({ isOpen, onClose }: BudgetModalProps) {
+export function BudgetModal({ isOpen, onClose, onLeadAdded }: BudgetModalProps) {
   const [step, setStep] = useState(1);
   const [category, setCategory] = useState<"inss" | "transito" | "administrativo" | "">("");
   const [serviceId, setServiceId] = useState("");
@@ -58,19 +59,40 @@ export function BudgetModal({ isOpen, onClose }: BudgetModalProps) {
     e.preventDefault();
     if (!name || !whatsapp) return;
     
-    // Submit lead to our database API
     const selectedService = getSelectedServiceDetails();
+    const leadData = {
+      id: `lead-${Date.now()}`,
+      name,
+      phone: whatsapp,
+      service: selectedService?.label || "Orçamento",
+      message: description || `Simulador de Orçamento: ${selectedService?.label}. Estimativa base: ${selectedService?.basePrice}`,
+      type: "Orçamento",
+      status: "Novo",
+      date: new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })
+    };
+
+    // Callback to save locally
+    if (onLeadAdded) {
+      onLeadAdded(leadData);
+    } else {
+      const saved = localStorage.getItem("sp_site_data");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          parsed.leads = [leadData, ...(parsed.leads || [])];
+          localStorage.setItem("sp_site_data", JSON.stringify(parsed));
+        } catch (err) {
+          console.warn(err);
+        }
+      }
+    }
+
+    // Submit lead to our database API
     fetch("/api/leads", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name,
-        phone: whatsapp,
-        service: selectedService?.label || "Orçamento",
-        message: description || `Simulador de Orçamento: ${selectedService?.label}. Estimativa base: ${selectedService?.basePrice}`,
-        type: "Orçamento"
-      })
-    }).catch(err => console.error("Erro ao enviar lead:", err));
+      body: JSON.stringify(leadData)
+    }).catch(err => console.warn("Erro ao enviar lead:", err));
 
     setStep(4);
   };
