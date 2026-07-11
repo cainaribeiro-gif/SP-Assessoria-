@@ -36,7 +36,7 @@ function writeSiteData(data: any): boolean {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   // Middleware for parsing JSON requests
   app.use(express.json());
