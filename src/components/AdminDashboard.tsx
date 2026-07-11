@@ -22,7 +22,9 @@ import {
   TrendingUp,
   Mail,
   MapPin,
-  Calendar
+  Calendar,
+  Upload,
+  Image as ImageIcon
 } from "lucide-react";
 
 interface AdminDashboardProps {
@@ -53,6 +55,65 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   const [showNewFaqForm, setShowNewFaqForm] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0];
+      if (file.type.startsWith("image/")) {
+        processImageFile(file);
+      }
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      processImageFile(e.target.files[0]);
+    }
+  };
+
+  const processImageFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let width = img.width;
+        let height = img.height;
+        
+        // Compress to max width 1000px for sharp but lightweight display
+        const MAX_WIDTH = 1000;
+        if (width > MAX_WIDTH) {
+          height = Math.round((height * MAX_WIDTH) / width);
+          width = MAX_WIDTH;
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          // Compress slightly to keep payload small for local/db storage
+          const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.75);
+          setEditingPost((prev: any) => ({ ...prev, imageUrl: compressedDataUrl }));
+        }
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Populate local states when siteData loads
   useEffect(() => {
@@ -699,28 +760,89 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-                        <div className="sm:col-span-8">
-                          <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">URL da Imagem Unsplash</label>
-                          <input
-                            type="text"
-                            required
-                            value={editingPost.imageUrl}
-                            onChange={(e) => setEditingPost({ ...editingPost, imageUrl: e.target.value })}
-                            className="w-full bg-gray-50 border border-gray-250 text-gray-800 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
-                          />
-                        </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Tempo de Leitura</label>
+                        <input
+                          type="text"
+                          required
+                          value={editingPost.readTime}
+                          onChange={(e) => setEditingPost({ ...editingPost, readTime: e.target.value })}
+                          placeholder="Ex: 5 min de leitura"
+                          className="w-full bg-gray-50 border border-gray-250 text-gray-800 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                        />
+                      </div>
 
-                        <div className="sm:col-span-4">
-                          <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Tempo de Leitura</label>
-                          <input
-                            type="text"
-                            required
-                            value={editingPost.readTime}
-                            onChange={(e) => setEditingPost({ ...editingPost, readTime: e.target.value })}
-                            placeholder="Ex: 5 min de leitura"
-                            className="w-full bg-gray-50 border border-gray-250 text-gray-800 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
-                          />
+                      {/* SEÇÃO DA IMAGEM DO ARTIGO COM SUPORTE A UPLOAD E DRAG & DROP */}
+                      <div className="bg-gray-50 border border-gray-250 rounded-xl p-4 space-y-3">
+                        <span className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider">Imagem do Artigo</span>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                          {/* Preview da Imagem */}
+                          <div className="md:col-span-4 flex flex-col justify-center items-center bg-white border border-gray-150 rounded-lg p-2 min-h-[140px] relative group overflow-hidden">
+                            {editingPost.imageUrl ? (
+                              <>
+                                <img 
+                                  src={editingPost.imageUrl} 
+                                  alt="Preview" 
+                                  className="w-full h-32 object-cover rounded-md"
+                                />
+                                <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingPost({ ...editingPost, imageUrl: "" })}
+                                    className="px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold text-[10px] rounded-lg transition-colors cursor-pointer"
+                                  >
+                                    Remover Imagem
+                                  </button>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="text-center p-4">
+                                <ImageIcon className="w-8 h-8 text-gray-300 mx-auto mb-1" />
+                                <span className="text-[10px] text-gray-400 font-medium">Sem imagem definida</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Dropzone de Upload */}
+                          <div className="md:col-span-8 flex flex-col gap-3">
+                            <div 
+                              onDragOver={handleDragOver}
+                              onDragLeave={handleDragLeave}
+                              onDrop={handleDrop}
+                              onClick={() => fileInputRef.current?.click()}
+                              className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-all duration-200 flex flex-col items-center justify-center min-h-[100px] ${
+                                isDragging 
+                                  ? "border-brand-gold-500 bg-brand-gold-50/50" 
+                                  : "border-gray-250 bg-white hover:border-brand-navy-500 hover:bg-gray-50/50"
+                              }`}
+                            >
+                              <input 
+                                type="file"
+                                ref={fileInputRef}
+                                accept="image/*"
+                                onChange={handleFileChange}
+                                className="hidden"
+                              />
+                              <Upload className="w-6 h-6 text-gray-400 mb-1" />
+                              <span className="text-[11px] font-bold text-gray-700">Arraste uma imagem aqui ou clique para buscar</span>
+                              <span className="text-[9px] text-gray-400 mt-0.5">Formatos suportados: PNG, JPG, WEBP. Redimensionamento automático inteligente.</span>
+                            </div>
+
+                            <div className="relative">
+                              <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                                <span className="text-[9px] font-bold text-gray-400 uppercase">URL</span>
+                              </div>
+                              <input
+                                type="text"
+                                required
+                                value={editingPost.imageUrl}
+                                onChange={(e) => setEditingPost({ ...editingPost, imageUrl: e.target.value })}
+                                placeholder="Ou cole a URL direta de uma imagem da internet..."
+                                className="w-full bg-white border border-gray-250 text-gray-800 rounded-lg pl-12 pr-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                              />
+                            </div>
+                          </div>
                         </div>
                       </div>
 
@@ -983,6 +1105,77 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                   </div>
 
                   <form onSubmit={handleSaveConfig} className="space-y-6">
+                    {/* Visual Identity & Logo */}
+                    <div className="bg-white border border-gray-150 rounded-xl p-6 shadow-sm space-y-4">
+                      <h3 className="text-sm font-bold text-brand-navy-900 border-b border-gray-100 pb-2">Identidade Visual e Logotipo</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
+                        <div className="md:col-span-3 flex flex-col items-center justify-center border border-dashed border-gray-200 rounded-xl p-4 bg-gray-50/50">
+                          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2 text-center">Visualização do Logo</span>
+                          <div className="relative w-20 h-20 rounded-full border border-brand-gold-500/40 bg-white flex items-center justify-center overflow-hidden shadow-xs">
+                            {localConfig.logoUrl ? (
+                              <img 
+                                src={localConfig.logoUrl} 
+                                alt="SP Assessoria Logo Preview" 
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full object-contain p-1"
+                              />
+                            ) : (
+                              <div className="text-center text-gray-400 p-2">
+                                <span className="text-[9px] block leading-tight font-semibold">Usando Vetor</span>
+                                <span className="text-[8px] block text-brand-gold-600 font-bold mt-1">Padrão SP</span>
+                              </div>
+                            )}
+                          </div>
+                          {localConfig.logoUrl && (
+                            <button
+                              type="button"
+                              onClick={() => setLocalConfig({ ...localConfig, logoUrl: "" })}
+                              className="mt-3 text-[10px] text-red-600 hover:text-red-800 font-bold underline cursor-pointer"
+                            >
+                              Remover e usar padrão
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="md:col-span-9 space-y-4">
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Upload do Logo PNG / JPG (Máx 800KB)</label>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  if (file.size > 800000) {
+                                    alert("Por favor, selecione uma imagem menor que 800KB para garantir o carregamento ágil.");
+                                    return;
+                                  }
+                                  const reader = new FileReader();
+                                  reader.onloadend = () => {
+                                    setLocalConfig({ ...localConfig, logoUrl: reader.result as string });
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                              className="w-full bg-gray-50 border border-gray-250 text-gray-800 rounded-lg px-3 py-1.5 text-xs focus:outline-hidden file:mr-4 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-[10px] file:font-semibold file:bg-brand-navy-900 file:text-white hover:file:bg-brand-navy-800 file:cursor-pointer"
+                            />
+                            <p className="text-[10px] text-gray-400 mt-1">Carregue um arquivo PNG transparente para substituir o logotipo do cabeçalho e do rodapé.</p>
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Ou Link Direto da Imagem (URL)</label>
+                            <input
+                              type="text"
+                              placeholder="https://exemplo.com/seu-logo.png"
+                              value={localConfig.logoUrl || ""}
+                              onChange={(e) => setLocalConfig({ ...localConfig, logoUrl: e.target.value })}
+                              className="w-full bg-gray-50 border border-gray-250 text-gray-800 rounded-lg px-3 py-2 text-xs focus:outline-hidden"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
                     {/* Contact details */}
                     <div className="bg-white border border-gray-150 rounded-xl p-6 shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-brand-navy-900 border-b border-gray-100 pb-2">Canais de Contato & Institucional</h3>

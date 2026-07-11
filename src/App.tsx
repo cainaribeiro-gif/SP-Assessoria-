@@ -37,6 +37,7 @@ import { LegalModal } from "./components/LegalModals";
 import { WhatsAppButton } from "./components/WhatsAppButton";
 import { ChatWidget } from "./components/ChatWidget";
 import { AdminDashboard } from "./components/AdminDashboard";
+import { Logo } from "./components/Logo";
 import defaultSiteData from "./site-data.json";
 import { ServiceItem, BlogPost, FAQItem, Review, ProcessStatus, TimelineStep } from "./types";
 
@@ -498,72 +499,19 @@ export default function App() {
     <div className="min-h-screen bg-[#fafafb] text-gray-800 font-sans relative overflow-x-hidden selection:bg-brand-gold-500 selection:text-brand-navy-950">
       
       {/* HEADER / NAVIGATION */}
-      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-gray-100">
+      <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-gray-100 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-20">
+          <div className="flex items-center justify-between h-24">
             {/* Logo and Brand Title */}
-            <a href="#" className="flex items-center gap-3 group focus:outline-hidden">
-              <div className="relative w-12 h-12 rounded-full border border-brand-gold-500 bg-white flex items-center justify-center overflow-hidden transition-transform duration-300 group-hover:scale-105 shadow-xs">
-                {/* SVG vector representation of the luxury logo */}
-                <svg viewBox="0 0 100 100" className="w-10 h-10 fill-none">
-                  {/* Crescent Gold Arc */}
-                  <path 
-                    d="M 59 16 A 35 35 0 1 0 65 82" 
-                    stroke="#c5a059" 
-                    strokeWidth="2.5" 
-                    strokeLinecap="round" 
-                  />
-                  
-                  {/* S Text (Navy) */}
-                  <text 
-                    x="42" 
-                    y="46" 
-                    fontSize="34" 
-                    fontFamily="Georgia, serif" 
-                    fontWeight="bold" 
-                    fill="#0c1c38" 
-                    textAnchor="middle"
-                  >
-                    S
-                  </text>
-                  
-                  {/* P Text (Navy) */}
-                  <text 
-                    x="58" 
-                    y="58" 
-                    fontSize="34" 
-                    fontFamily="Georgia, serif" 
-                    fontWeight="bold" 
-                    fill="#0c1c38" 
-                    textAnchor="middle"
-                  >
-                    P
-                  </text>
-                  
-                  {/* Column (Gold) */}
-                  <g fill="#c5a059">
-                    {/* Capital Top */}
-                    <rect x="36" y="48" width="11" height="1.5" rx="0.5" />
-                    {/* Capital Middle */}
-                    <rect x="37" y="50" width="9" height="1.5" rx="0.5" />
-                    {/* Capital Base */}
-                    <rect x="38" y="51.5" width="7" height="1" rx="0.3" />
-                    {/* Pillars with cutouts */}
-                    <rect x="38.5" y="52.5" width="6" height="11.5" />
-                    {/* Slits to form columns */}
-                    <rect x="39.8" y="52.5" width="0.7" height="11.5" fill="white" />
-                    <rect x="41.3" y="52.5" width="0.7" height="11.5" fill="white" />
-                    <rect x="42.8" y="52.5" width="0.7" height="11.5" fill="white" />
-                    {/* Base */}
-                    <rect x="36.5" y="64" width="10" height="2" rx="0.5" />
-                  </g>
-                </svg>
+            <a href="#" className="flex flex-row items-center gap-3.5 sm:gap-4.5 group focus:outline-hidden">
+              <div className="flex items-center justify-center shrink-0">
+                <Logo logoUrl={siteConfigData.logoUrl} iconClassName="w-14 h-14 sm:w-16 sm:h-16 shadow-md" />
               </div>
-              <div className="flex flex-col">
-                <span className="text-brand-navy-900 font-display font-bold text-lg tracking-wide group-hover:text-brand-gold-500 transition-colors leading-tight">
+              <div className="flex flex-col text-left justify-center gap-1 sm:gap-1.5 py-0.5">
+                <span className="text-brand-navy-900 font-serif font-bold text-xl sm:text-2xl tracking-wide group-hover:text-brand-gold-500 transition-colors leading-none">
                   SP Assessoria
                 </span>
-                <span className="text-[9px] uppercase tracking-widest text-gray-500 font-mono">
+                <span className="text-[8.5px] sm:text-[10px] uppercase tracking-[0.22em] text-gray-500 font-sans font-semibold leading-none">
                   Recursos Administrativos
                 </span>
               </div>
@@ -1748,65 +1696,13 @@ export default function App() {
             
             {/* Logo and brief intro */}
             <div className="md:col-span-4 space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="relative w-10 h-10 rounded-full border border-brand-gold-500 bg-white flex items-center justify-center overflow-hidden">
-                  <svg viewBox="0 0 100 100" className="w-8 h-8 fill-none">
-                    {/* Crescent Gold Arc */}
-                    <path 
-                      d="M 59 16 A 35 35 0 1 0 65 82" 
-                      stroke="#c5a059" 
-                      strokeWidth="2.5" 
-                      strokeLinecap="round" 
-                    />
-                    
-                    {/* S Text (Navy) */}
-                    <text 
-                      x="42" 
-                      y="46" 
-                      fontSize="34" 
-                      fontFamily="Georgia, serif" 
-                      fontWeight="bold" 
-                      fill="#0c1c38" 
-                      textAnchor="middle"
-                    >
-                      S
-                    </text>
-                    
-                    {/* P Text (Navy) */}
-                    <text 
-                      x="58" 
-                      y="58" 
-                      fontSize="34" 
-                      fontFamily="Georgia, serif" 
-                      fontWeight="bold" 
-                      fill="#0c1c38" 
-                      textAnchor="middle"
-                    >
-                      P
-                    </text>
-                    
-                    {/* Column (Gold) */}
-                    <g fill="#c5a059">
-                      {/* Capital Top */}
-                      <rect x="36" y="48" width="11" height="1.5" rx="0.5" />
-                      {/* Capital Middle */}
-                      <rect x="37" y="50" width="9" height="1.5" rx="0.5" />
-                      {/* Capital Base */}
-                      <rect x="38" y="51.5" width="7" height="1" rx="0.3" />
-                      {/* Pillars with cutouts */}
-                      <rect x="38.5" y="52.5" width="6" height="11.5" />
-                      {/* Slits to form columns */}
-                      <rect x="39.8" y="52.5" width="0.7" height="11.5" fill="white" />
-                      <rect x="41.3" y="52.5" width="0.7" height="11.5" fill="white" />
-                      <rect x="42.8" y="52.5" width="0.7" height="11.5" fill="white" />
-                      {/* Base */}
-                      <rect x="36.5" y="64" width="10" height="2" rx="0.5" />
-                    </g>
-                  </svg>
+              <div className="flex flex-row items-center gap-3.5">
+                <div className="flex items-center justify-center shrink-0">
+                  <Logo logoUrl={siteConfigData.logoUrl} iconClassName="w-13 h-13 shadow-md" />
                 </div>
-                <div>
-                  <h4 className="text-white font-display font-bold text-base">SP Assessoria</h4>
-                  <p className="text-[9px] uppercase tracking-widest text-brand-gold-500 font-mono">Recursos Administrativos</p>
+                <div className="flex flex-col text-left justify-center gap-1 py-0.5">
+                  <h4 className="text-white font-serif font-bold text-lg leading-none">SP Assessoria</h4>
+                  <p className="text-[9px] uppercase tracking-[0.18em] text-brand-gold-500 font-sans font-semibold leading-none">Recursos Administrativos</p>
                 </div>
               </div>
 
