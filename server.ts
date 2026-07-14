@@ -22,7 +22,7 @@ dotenv.config();
 
 // Initialize Firebase SDK
 const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+const db = getFirestore(firebaseApp, (firebaseConfig as any).firestoreDatabaseId);
 
 // Path to site data file (for initial seeding)
 const SITE_DATA_PATH = path.join(process.cwd(), "src", "site-data.json");

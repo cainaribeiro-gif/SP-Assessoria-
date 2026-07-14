@@ -2,6 +2,20 @@ import React, { useState, useEffect } from "react";
 import { signInWithPopup, GoogleAuthProvider, signOut } from "firebase/auth";
 import { auth } from "../firebase";
 import { 
+  setWorkspaceToken, 
+  getWorkspaceToken, 
+  clearWorkspaceToken, 
+  isWorkspaceConnected,
+  createLeadsSpreadsheet,
+  syncLeadsToSpreadsheet,
+  createLeadDriveFolder,
+  listFolderFiles,
+  uploadFileToFolder,
+  sendGmailReply,
+  createGoogleTask,
+  DriveFile
+} from "../lib/workspace";
+import { 
   Lock, 
   User, 
   X, 
@@ -26,7 +40,15 @@ import {
   MapPin,
   Calendar,
   Upload,
-  Image as ImageIcon
+  Image as ImageIcon,
+  FolderOpen,
+  FileSpreadsheet,
+  CheckSquare,
+  Send,
+  FolderPlus,
+  Folder,
+  ExternalLink,
+  FileUp
 } from "lucide-react";
 
 interface AdminDashboardProps {
@@ -41,7 +63,35 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
-  const [activeTab, setActiveTab] = useState<"leads" | "blog" | "services" | "faqs" | "config">("leads");
+  const [activeTab, setActiveTab] = useState<"leads" | "blog" | "services" | "faqs" | "config" | "google">("leads");
+  
+  // Google Workspace state variables
+  const [isGoogleConnected, setIsGoogleConnected] = useState(isWorkspaceConnected());
+  const [googleUserEmail, setGoogleUserEmail] = useState<string | null>(auth.currentUser?.email || null);
+  const [spreadsheetUrl, setSpreadsheetUrl] = useState<string>(localStorage.getItem("sp_leads_spreadsheet_id") ? `https://docs.google.com/spreadsheets/d/${localStorage.getItem("sp_leads_spreadsheet_id")}/edit` : "");
+  const [syncingSheets, setSyncingSheets] = useState(false);
+  
+  // Drive States
+  const [creatingFolderLeadId, setCreatingFolderLeadId] = useState<string | null>(null);
+  const [activeDriveLead, setActiveDriveLead] = useState<any | null>(null);
+  const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
+  const [loadingDriveFiles, setLoadingDriveFiles] = useState(false);
+  const [uploadingToDrive, setUploadingToDrive] = useState(false);
+  const driveFileInputRef = React.useRef<HTMLInputElement>(null);
+  
+  // Gmail States
+  const [emailModalLead, setEmailModalLead] = useState<any | null>(null);
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailBody, setEmailBody] = useState("");
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [emailTemplate, setEmailTemplate] = useState("recebimento");
+  
+  // Google Tasks States
+  const [taskModalLead, setTaskModalLead] = useState<any | null>(null);
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskNotes, setTaskNotes] = useState("");
+  const [taskDueDate, setTaskDueDate] = useState("");
+  const [creatingTask, setCreatingTask] = useState(false);
 
   // Local editable copies of data
   const [localLeads, setLocalLeads] = useState<any[]>([]);
@@ -134,6 +184,8 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     if (token === "sp_admin_token_2026_secured") {
       setIsLoggedIn(true);
     }
+    
+    setIsGoogleConnected(isWorkspaceConnected());
 
     // Connect Firebase Auth state change listener
     const unsubscribe = auth.onAuthStateChanged((user) => {
@@ -147,6 +199,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
         if (allowedAdmins.includes(email.toLowerCase())) {
           setIsLoggedIn(true);
           localStorage.setItem("sp_admin_token", "sp_admin_token_2026_secured");
+          setGoogleUserEmail(email);
         }
       }
     });
@@ -158,6 +211,10 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   const handleGoogleLogin = async () => {
     setLoginError("");
     const provider = new GoogleAuthProvider();
+    provider.addScope("https://mail.google.com/");
+    provider.addScope("https://www.googleapis.com/auth/drive");
+    provider.addScope("https://www.googleapis.com/auth/spreadsheets");
+    provider.addScope("https://www.googleapis.com/auth/tasks");
     try {
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
@@ -168,6 +225,12 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
         "admin@spassessoria.com.br"
       ];
       if (allowedAdmins.includes(email.toLowerCase())) {
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) {
+          setWorkspaceToken(credential.accessToken);
+          setIsGoogleConnected(true);
+          setGoogleUserEmail(email);
+        }
         localStorage.setItem("sp_admin_token", "sp_admin_token_2026_secured");
         setIsLoggedIn(true);
       } else {
@@ -225,6 +288,9 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
 
   const handleLogout = async () => {
     localStorage.removeItem("sp_admin_token");
+    clearWorkspaceToken();
+    setIsGoogleConnected(false);
+    setGoogleUserEmail(null);
     setIsLoggedIn(false);
     try {
       await signOut(auth);
@@ -277,6 +343,184 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     setLocalLeads(updatedLeads);
     const updatedData = { ...siteData, leads: updatedLeads };
     persistDataOnServer(updatedData);
+  };
+
+  // GOOGLE WORKSPACE ACTION HANDLERS
+  const handleCreateDriveFolder = async (leadId: string, leadName: string) => {
+    try {
+      setCreatingFolderLeadId(leadId);
+      const folder = await createLeadDriveFolder(leadName, leadId);
+      const updatedLeads = localLeads.map(l => l.id === leadId ? { ...l, driveFolderId: folder.id, driveFolderUrl: folder.url } : l);
+      setLocalLeads(updatedLeads);
+      const updatedData = { ...siteData, leads: updatedLeads };
+      await persistDataOnServer(updatedData);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err: any) {
+      console.error(err);
+      setSaveError("Erro ao criar pasta no Drive: " + (err.message || String(err)));
+      setTimeout(() => setSaveError(""), 5000);
+    } finally {
+      setCreatingFolderLeadId(null);
+    }
+  };
+
+  const handleSyncSheets = async () => {
+    try {
+      setSyncingSheets(true);
+      let sheetId = localStorage.getItem("sp_leads_spreadsheet_id");
+      let url = spreadsheetUrl;
+      if (!sheetId) {
+        const result = await createLeadsSpreadsheet();
+        sheetId = result.id;
+        url = result.url;
+        setSpreadsheetUrl(url);
+      }
+      
+      const leadsForSheet = localLeads.map(l => ({
+        id: l.id || "",
+        name: l.name || "",
+        phone: l.phone || "",
+        email: l.email || "",
+        service: l.service || "",
+        message: l.message || "",
+        date: l.date || "",
+        status: l.status || "",
+        type: l.type || ""
+      }));
+
+      await syncLeadsToSpreadsheet(sheetId, leadsForSheet);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err: any) {
+      console.error(err);
+      setSaveError("Erro ao sincronizar com Google Planilhas: " + (err.message || String(err)));
+      setTimeout(() => setSaveError(""), 5000);
+    } finally {
+      setSyncingSheets(false);
+    }
+  };
+
+  const handleLoadDriveFiles = async (lead: any) => {
+    try {
+      setActiveDriveLead(lead);
+      setLoadingDriveFiles(true);
+      setDriveFiles([]);
+      const files = await listFolderFiles(lead.driveFolderId);
+      setDriveFiles(files);
+    } catch (err: any) {
+      console.error(err);
+      setSaveError("Erro ao carregar arquivos do Drive: " + (err.message || String(err)));
+      setTimeout(() => setSaveError(""), 5000);
+    } finally {
+      setLoadingDriveFiles(false);
+    }
+  };
+
+  const handleUploadToDrive = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!activeDriveLead || !e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    try {
+      setUploadingToDrive(true);
+      
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        if (!event.target?.result) return;
+        const base64Data = event.target.result as string;
+        try {
+          await uploadFileToFolder(activeDriveLead.driveFolderId, file.name, file.type, base64Data);
+          // Reload file list
+          const files = await listFolderFiles(activeDriveLead.driveFolderId);
+          setDriveFiles(files);
+          setSaveSuccess(true);
+          setTimeout(() => setSaveSuccess(false), 3000);
+        } catch (err: any) {
+          console.error(err);
+          setSaveError("Erro ao fazer upload do arquivo: " + (err.message || String(err)));
+          setTimeout(() => setSaveError(""), 5000);
+        } finally {
+          setUploadingToDrive(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (err: any) {
+      console.error(err);
+      setSaveError("Erro ao ler arquivo para upload: " + (err.message || String(err)));
+      setUploadingToDrive(false);
+      setTimeout(() => setSaveError(""), 5000);
+    }
+  };
+
+  const handleOpenGmailModal = (lead: any) => {
+    setEmailModalLead(lead);
+    setEmailTemplate("recebimento");
+    // Default subject & body
+    const subject = `Recebemos seu caso sobre ${lead.service} - SP Assessoria`;
+    const body = `Olá <strong>${lead.name}</strong>,<br/><br/>Agradecemos o seu contato com a <strong>SP Assessoria de Recursos Administrativos</strong>.<br/><br/>Confirmamos o recebimento da sua solicitação referente a <strong>${lead.service}</strong>. Nossa equipe técnica de analistas já está avaliando as informações fornecidas.<br/><br/>Entraremos em contato via WhatsApp (<strong>${lead.phone}</strong>) nas próximas horas para dar continuidade ao seu atendimento.<br/><br/>Atenciosamente,<br/><strong>Equipe SP Assessoria de Recursos Administrativos</strong>`;
+    setEmailSubject(subject);
+    setEmailBody(body);
+  };
+
+  const handleEmailTemplateChange = (templateType: string, lead: any) => {
+    setEmailTemplate(templateType);
+    let subject = "";
+    let body = "";
+    
+    if (templateType === "recebimento") {
+      subject = `Recebemos seu caso sobre ${lead.service} - SP Assessoria`;
+      body = `Olá <strong>${lead.name}</strong>,<br/><br/>Agradecemos o seu contato com a <strong>SP Assessoria de Recursos Administrativos</strong>.<br/><br/>Confirmamos o recebimento da sua solicitação referente a <strong>${lead.service}</strong>. Nossa equipe técnica de analistas já está avaliando as informações fornecidas.<br/><br/>Entraremos em contato via WhatsApp (<strong>${lead.phone}</strong>) nas próximas horas para dar continuidade ao seu atendimento.<br/><br/>Atenciosamente,<br/><strong>Equipe SP Assessoria de Recursos Administrativos</strong>`;
+    } else if (templateType === "documentos") {
+      subject = `Documentos necessários para análise de recurso - SP Assessoria`;
+      body = `Olá <strong>${lead.name}</strong>,<br/><br/>Para darmos andamento ao recurso do seu caso sobre <strong>${lead.service}</strong>, precisamos que nos envie alguns documentos de suporte:<br/><br/>- Cópia da CNH (ou documento oficial com foto)<br/>- Cópia da Notificação de Autuação ou da Multa de Trânsito<br/>- Demais comprovantes relevantes para a defesa<br/><br/>Você pode nos enviar estes documentos respondendo a este e-mail, por WhatsApp ou, se preferir, carregando diretamente na sua pasta segura do Google Drive.<br/><br/>Atenciosamente,<br/><strong>Equipe SP Assessoria de Recursos Administrativos</strong>`;
+    } else {
+      subject = `Atualização de status do seu processo - SP Assessoria`;
+      body = `Olá <strong>${lead.name}</strong>,<br/><br/>Gostaríamos de informar que o seu recurso referente a <strong>${lead.service}</strong> foi elaborado e protocolado com sucesso junto ao órgão responsável.<br/><br/>Seguiremos acompanhando o andamento do processo de julgamento e qualquer novidade informaremos imediatamente.<br/><br/>Atenciosamente,<br/><strong>Equipe SP Assessoria de Recursos Administrativos</strong>`;
+    }
+    
+    setEmailSubject(subject);
+    setEmailBody(body);
+  };
+
+  const handleSendEmail = async () => {
+    if (!emailModalLead) return;
+    try {
+      setSendingEmail(true);
+      await sendGmailReply(emailModalLead.email, emailSubject, emailBody);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+      setEmailModalLead(null);
+    } catch (err: any) {
+      console.error(err);
+      setSaveError("Erro ao enviar e-mail: " + (err.message || String(err)));
+      setTimeout(() => setSaveError(""), 5000);
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
+  const handleOpenTaskModal = (lead: any) => {
+    setTaskModalLead(lead);
+    setTaskTitle(`Retornar Lead: ${lead.name}`);
+    setTaskNotes(`Retornar contato sobre assessoria em ${lead.service}.\nTelefone: ${lead.phone}\nE-mail: ${lead.email || "-"}`);
+    setTaskDueDate(new Date(Date.now() + 86400000).toISOString().split("T")[0]); // tomorrow
+  };
+
+  const handleCreateTask = async () => {
+    if (!taskModalLead) return;
+    try {
+      setCreatingTask(true);
+      const isoDate = taskDueDate ? `${taskDueDate}T23:59:59Z` : undefined;
+      await createGoogleTask(taskTitle, taskNotes, isoDate);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+      setTaskModalLead(null);
+    } catch (err: any) {
+      console.error(err);
+      setSaveError("Erro ao agendar tarefa: " + (err.message || String(err)));
+      setTimeout(() => setSaveError(""), 5000);
+    } finally {
+      setCreatingTask(false);
+    }
   };
 
   // BLOG ACTIONS
@@ -570,6 +814,18 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                   <Settings className="w-4 h-4" />
                   <span>Configurações do Site</span>
                 </button>
+
+                <button
+                  onClick={() => { setActiveTab("google"); }}
+                  className={`w-full px-4 py-3 text-xs font-bold rounded-lg flex items-center gap-2.5 transition-all text-left cursor-pointer ${
+                    activeTab === "google" 
+                      ? "bg-[#4285F4] text-white shadow-xs" 
+                      : "text-gray-600 hover:bg-gray-100 hover:text-[#4285F4]/10"
+                  }`}
+                >
+                  <FolderOpen className="w-4 h-4" />
+                  <span>Google Workspace</span>
+                </button>
               </div>
 
               {/* STATS STRIP ON SIDEBAR */}
@@ -668,6 +924,65 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                               <p className="text-xs p-3 bg-gray-50 border border-gray-100 rounded-lg text-gray-600 italic whitespace-pre-line leading-relaxed">
                                 "{lead.message}"
                               </p>
+                            )}
+
+                            {/* Google Workspace Lead Actions Bar */}
+                            {isGoogleConnected && (
+                              <div className="mt-3.5 pt-3.5 border-t border-gray-100 flex flex-wrap items-center gap-2">
+                                <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-gray-400 mr-1 flex items-center gap-1">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-[#4285F4]"></span>
+                                  Google Workspace:
+                                </span>
+                                
+                                {lead.driveFolderUrl ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <a
+                                      href={lead.driveFolderUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="px-2.5 py-1.5 bg-blue-50 text-[#4285F4] border border-blue-150 hover:bg-blue-100 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all"
+                                      title="Abrir pasta no Google Drive"
+                                    >
+                                      <Folder className="w-3.5 h-3.5" />
+                                      <span>Pasta Drive</span>
+                                    </a>
+                                    <button
+                                      onClick={() => handleLoadDriveFiles(lead)}
+                                      className="px-2.5 py-1.5 bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer"
+                                    >
+                                      <FolderOpen className="w-3.5 h-3.5" />
+                                      <span>Ver/Enviar Documentos</span>
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => handleCreateDriveFolder(lead.id, lead.name)}
+                                    disabled={creatingFolderLeadId === lead.id}
+                                    className="px-2.5 py-1.5 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-50 border border-amber-200 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer"
+                                  >
+                                    <FolderPlus className="w-3.5 h-3.5" />
+                                    <span>{creatingFolderLeadId === lead.id ? "Criando Pasta..." : "Criar Pasta Drive"}</span>
+                                  </button>
+                                )}
+
+                                {lead.email && (
+                                  <button
+                                    onClick={() => handleOpenGmailModal(lead)}
+                                    className="px-2.5 py-1.5 bg-red-50 text-red-700 border border-red-150 hover:bg-red-100 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer"
+                                  >
+                                    <Mail className="w-3.5 h-3.5" />
+                                    <span>Responder por E-mail</span>
+                                  </button>
+                                )}
+
+                                <button
+                                  onClick={() => handleOpenTaskModal(lead)}
+                                  className="px-2.5 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-150 hover:bg-emerald-100 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer"
+                                >
+                                  <CheckSquare className="w-3.5 h-3.5" />
+                                  <span>Criar Tarefa</span>
+                                </button>
+                              </div>
                             )}
                           </div>
 
@@ -1371,6 +1686,208 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                 </div>
               )}
 
+              {/* TAB 6: GOOGLE WORKSPACE MANAGEMENT */}
+              {activeTab === "google" && (
+                <div className="space-y-6 text-left">
+                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                    <div>
+                      <h2 className="text-lg font-display font-extrabold text-[#4285F4] flex items-center gap-2">
+                        <FolderOpen className="w-5 h-5" />
+                        <span>Gerenciador Google Workspace</span>
+                      </h2>
+                      <p className="text-xs text-gray-500">Acompanhe conexões do Google Planilhas, Drive, Gmail e Tasks da SP Assessoria.</p>
+                    </div>
+                  </div>
+
+                  {/* Account Status Card */}
+                  <div className="bg-white border border-gray-150 rounded-xl p-6 shadow-sm flex flex-col md:flex-row justify-between items-center gap-6">
+                    <div className="flex items-start gap-4">
+                      <div className="p-3 bg-blue-50 text-[#4285F4] rounded-xl shrink-0">
+                        <Shield className="w-7 h-7" />
+                      </div>
+                      <div className="space-y-1">
+                        <h3 className="text-sm font-bold text-brand-navy-900">
+                          {isGoogleConnected ? "Integração Google Workspace Ativa" : "Conectar ao Google Workspace"}
+                        </h3>
+                        <p className="text-xs text-gray-500 max-w-lg leading-relaxed">
+                          {isGoogleConnected 
+                            ? `Autenticado como ${googleUserEmail || "administrador"}. Todas as ferramentas do Google Drive, Planilhas, Gmail e Google Tasks estão sincronizadas.`
+                            : "Para automatizar seu escritório, crie planilhas de leads em tempo real, crie pastas de clientes seguras no Drive, responda por Gmail e agende tarefas no Google Tasks."}
+                        </p>
+                      </div>
+                    </div>
+                    <div>
+                      {isGoogleConnected ? (
+                        <button
+                          onClick={handleLogout}
+                          className="px-4 py-2 text-red-600 bg-red-50 hover:bg-red-100 font-bold text-xs rounded-lg border border-red-200 transition-all cursor-pointer"
+                        >
+                          Desconectar Conta Google
+                        </button>
+                      ) : (
+                        <button
+                          onClick={handleGoogleLogin}
+                          className="px-5 py-2.5 bg-[#4285F4] hover:bg-[#3574de] text-white font-bold text-xs rounded-lg flex items-center gap-2 transition-all shadow-sm hover:shadow-md cursor-pointer"
+                        >
+                          <Lock className="w-4 h-4" />
+                          <span>Autenticar com o Google</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {isGoogleConnected && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      
+                      {/* Left Block: Google Sheets Control */}
+                      <div className="bg-white border border-gray-150 rounded-xl p-6 shadow-sm flex flex-col justify-between gap-6">
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
+                              <FileSpreadsheet className="w-5 h-5" />
+                            </div>
+                            <h3 className="text-sm font-bold text-brand-navy-900">Sincronização com Google Planilhas</h3>
+                          </div>
+                          <p className="text-xs text-gray-500 leading-relaxed">
+                            Mantenha um controle centralizado de todos os seus leads e consultas em tempo real diretamente em uma planilha Google Sheets. Ideal para backups ou compartilhamento com consultores comerciais externos.
+                          </p>
+                          
+                          {spreadsheetUrl && (
+                            <div className="p-3 bg-gray-50 border border-gray-100 rounded-lg text-xs flex items-center justify-between gap-4">
+                              <span className="truncate text-gray-500 font-medium">Planilha de Controle</span>
+                              <a 
+                                href={spreadsheetUrl} 
+                                target="_blank" 
+                                rel="noreferrer" 
+                                className="text-emerald-600 font-bold hover:underline shrink-0 flex items-center gap-1 font-mono"
+                              >
+                                <span>Abrir Planilha</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <button
+                            onClick={handleSyncSheets}
+                            disabled={syncingSheets}
+                            className="w-full px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                          >
+                            <RefreshCw className={`w-4 h-4 ${syncingSheets ? "animate-spin" : ""}`} />
+                            <span>{syncingSheets ? "Sincronizando com o Sheets..." : spreadsheetUrl ? "Sincronizar Leads Agora" : "Criar Planilha de Leads"}</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Right Block: Google Tasks & Automation Info */}
+                      <div className="bg-white border border-gray-150 rounded-xl p-6 shadow-sm flex flex-col justify-between gap-6">
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="p-2 bg-purple-50 text-purple-600 rounded-lg">
+                              <CheckSquare className="w-5 h-5" />
+                            </div>
+                            <h3 className="text-sm font-bold text-brand-navy-900">Agenda & Google Tarefas</h3>
+                          </div>
+                          <p className="text-xs text-gray-500 leading-relaxed">
+                            Crie lembretes de acompanhamento e tarefas diretamente nas suas contas oficiais do Google Tasks. Você pode fazer isso diretamente de cada Lead na aba <strong>Leads & Consultas</strong> para garantir que nenhum caso de recurso de trânsito ou INSS seja esquecido.
+                          </p>
+                          <div className="space-y-2 mt-2">
+                            <div className="flex items-center gap-2 text-xs text-gray-600 font-semibold">
+                              <Check className="w-4 h-4 text-purple-500" />
+                              <span>Integração de lembretes em 1 clique</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-gray-600 font-semibold">
+                              <Check className="w-4 h-4 text-purple-500" />
+                              <span>Prazos e datas de conclusão integrados</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => setActiveTab("leads")}
+                          className="w-full px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer"
+                        >
+                          <span>Ver Leads para Agendar Tarefas</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Drive Folder Directory Panel */}
+                  {isGoogleConnected && (
+                    <div className="bg-white border border-gray-150 rounded-xl p-6 shadow-sm space-y-4">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-2 bg-blue-50 text-[#4285F4] rounded-lg">
+                          <Folder className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-brand-navy-900">Diretório de Pastas de Clientes (Drive)</h3>
+                          <p className="text-xs text-gray-400">Pastas de backup para armazenamento e organização dos documentos do cliente (CNH, multas, petições).</p>
+                        </div>
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs text-left border-collapse">
+                          <thead>
+                            <tr className="bg-gray-50 border-y border-gray-150 text-gray-400 uppercase tracking-wider font-bold">
+                              <th className="p-3">Cliente</th>
+                              <th className="p-3">Serviço / Interesse</th>
+                              <th className="p-3 text-center">Status no Drive</th>
+                              <th className="p-3 text-right">Ações no Drive</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {localLeads.map((lead) => (
+                              <tr key={lead.id} className="hover:bg-gray-50/50">
+                                <td className="p-3 font-bold text-brand-navy-900">{lead.name}</td>
+                                <td className="p-3 text-gray-500 font-medium">{lead.service}</td>
+                                <td className="p-3 text-center">
+                                  {lead.driveFolderUrl ? (
+                                    <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-150 rounded-full font-bold text-[9px] uppercase font-mono">Pasta Ativa</span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-150 rounded-full font-bold text-[9px] uppercase font-mono">Sem Pasta</span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-right">
+                                  {lead.driveFolderUrl ? (
+                                    <div className="flex justify-end items-center gap-2">
+                                      <a
+                                        href={lead.driveFolderUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg border border-blue-100"
+                                        title="Abrir no Google Drive"
+                                      >
+                                        <ExternalLink className="w-3.5 h-3.5" />
+                                      </a>
+                                      <button
+                                        onClick={() => handleLoadDriveFiles(lead)}
+                                        className="px-2 py-1 bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100 rounded-lg text-[10px] font-bold cursor-pointer"
+                                      >
+                                        Arquivos
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => handleCreateDriveFolder(lead.id, lead.name)}
+                                      disabled={creatingFolderLeadId === lead.id}
+                                      className="px-2.5 py-1 bg-amber-50 text-amber-700 border border-amber-150 hover:bg-amber-100 rounded-lg text-[10px] font-bold cursor-pointer disabled:opacity-50"
+                                    >
+                                      {creatingFolderLeadId === lead.id ? "Criando..." : "Criar Pasta"}
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* BOTTOM STATS/FOOTER */}
               <div className="mt-8 border-t border-gray-200 pt-4 text-center text-[10px] text-gray-400 font-mono flex flex-col sm:flex-row justify-between gap-2">
                 <span>© 2026 SP Assessoria de Recursos Administrativos • Ambiente Restrito</span>
@@ -1379,6 +1896,282 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
             </div>
           </div>
         )}
+
+        {/* MODAL 1: GOOGLE DRIVE FILE EXPLORER OVERLAY */}
+        {activeDriveLead && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+            <div className="bg-white rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl border border-gray-100 flex flex-col text-left">
+              <div className="bg-brand-navy-900 p-5 text-white flex justify-between items-center">
+                <div>
+                  <h3 className="text-sm font-bold flex items-center gap-2">
+                    <FolderOpen className="w-4 h-4 text-blue-400" />
+                    <span>Documentos de {activeDriveLead.name}</span>
+                  </h3>
+                  <p className="text-[11px] text-gray-400 mt-0.5">Armazenamento oficial e seguro no Google Drive</p>
+                </div>
+                <button 
+                  onClick={() => setActiveDriveLead(null)}
+                  className="p-1.5 hover:bg-white/10 rounded-lg text-white/80 hover:text-white transition-all cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-5 overflow-y-auto max-h-[70vh]">
+                
+                {/* File Upload Area */}
+                <div className="border-2 border-dashed border-gray-200 hover:border-blue-400 rounded-xl p-5 text-center transition-all bg-gray-50 hover:bg-blue-50/20 relative group">
+                  <input
+                    type="file"
+                    ref={driveFileInputRef}
+                    onChange={handleUploadToDrive}
+                    className="hidden"
+                  />
+                  <div className="space-y-2">
+                    <div className="p-2.5 bg-blue-50 text-blue-500 rounded-full w-10 h-10 flex items-center justify-center mx-auto transition-all group-hover:scale-110">
+                      <FileUp className="w-5 h-5" />
+                    </div>
+                    <div className="text-xs">
+                      <button
+                        onClick={() => driveFileInputRef.current?.click()}
+                        disabled={uploadingToDrive}
+                        className="text-[#4285F4] font-bold hover:underline cursor-pointer disabled:opacity-50"
+                      >
+                        {uploadingToDrive ? "Enviando arquivo..." : "Clique para selecionar um arquivo"}
+                      </button>
+                      <p className="text-[10px] text-gray-400 mt-1">Carregue comprovantes, CNH, multas ou petições de recurso diretamente (Max 10MB)</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Drive Files List */}
+                <div className="space-y-2">
+                  <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Arquivos na Pasta do Drive</h4>
+                  
+                  {loadingDriveFiles ? (
+                    <div className="p-8 text-center text-gray-400 text-xs flex flex-col items-center justify-center gap-2">
+                      <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
+                      <span>Carregando diretório de arquivos...</span>
+                    </div>
+                  ) : driveFiles.length === 0 ? (
+                    <div className="p-8 text-center text-gray-400 border border-gray-100 rounded-xl text-xs bg-gray-50/50">
+                      Nenhum arquivo enviado para esta pasta ainda.
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 max-h-60 overflow-y-auto divide-y divide-gray-100">
+                      {driveFiles.map((file) => (
+                        <div key={file.id} className="py-2.5 flex items-center justify-between gap-3 group text-xs">
+                          <div className="flex items-center gap-2 truncate">
+                            <img src={file.iconLink} alt="" className="w-4 h-4 opacity-75" referrerPolicy="no-referrer" />
+                            <span className="font-medium text-gray-700 truncate group-hover:text-blue-600">{file.name}</span>
+                          </div>
+                          <a
+                            href={file.webViewLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="px-2 py-1 text-[10px] text-blue-600 hover:underline shrink-0 font-bold flex items-center gap-0.5"
+                          >
+                            <span>Visualizar</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-2">
+                <a
+                  href={activeDriveLead.driveFolderUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3.5 py-1.5 bg-blue-50 text-[#4285F4] font-bold text-xs rounded-lg border border-blue-150 hover:bg-blue-100 flex items-center gap-1 transition-all"
+                >
+                  <Folder className="w-3.5 h-3.5" />
+                  <span>Ver no Google Drive</span>
+                </a>
+                <button
+                  onClick={() => setActiveDriveLead(null)}
+                  className="px-3.5 py-1.5 bg-white border border-gray-200 text-gray-700 font-bold text-xs rounded-lg hover:bg-gray-50 transition-all cursor-pointer"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 2: GMAIL RESPONSE COMPOSER */}
+        {emailModalLead && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+            <div className="bg-[#EA4335] p-5 text-white flex justify-between items-center">
+              <div>
+                <h3 className="text-sm font-bold flex items-center gap-2">
+                  <Mail className="w-4 h-4 text-white" />
+                  <span>Responder Lead via Gmail</span>
+                </h3>
+                <p className="text-[11px] text-red-100 mt-0.5">Envia um e-mail de resposta formal e personalizado usando sua conta</p>
+              </div>
+              <button 
+                onClick={() => setEmailModalLead(null)}
+                className="p-1.5 hover:bg-white/10 rounded-lg text-white/80 hover:text-white transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-white rounded-b-2xl w-full max-w-xl overflow-hidden shadow-2xl border border-gray-100 flex flex-col text-left">
+              <div className="p-6 space-y-4 overflow-y-auto max-h-[70vh]">
+                
+                {/* Recipient */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Destinatário</label>
+                    <input
+                      type="text"
+                      disabled
+                      value={`${emailModalLead.name} (${emailModalLead.email})`}
+                      className="w-full bg-gray-50 border border-gray-200 text-gray-500 rounded-lg px-3 py-2 text-xs focus:outline-hidden font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Selecionar Modelo de E-mail</label>
+                    <select
+                      value={emailTemplate}
+                      onChange={(e) => handleEmailTemplateChange(e.target.value, emailModalLead)}
+                      className="w-full bg-white border border-gray-250 text-gray-800 rounded-lg px-3 py-2 text-xs focus:outline-hidden font-medium cursor-pointer"
+                    >
+                      <option value="recebimento">Confirmar Recebimento de Caso</option>
+                      <option value="documentos">Solicitar Documentação Restante</option>
+                      <option value="atualizacao">Atualização de Status de Processo</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Subject */}
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Assunto do E-mail</label>
+                  <input
+                    type="text"
+                    value={emailSubject}
+                    onChange={(e) => setEmailSubject(e.target.value)}
+                    className="w-full bg-white border border-gray-250 text-gray-800 rounded-lg px-3 py-2 text-xs focus:outline-hidden font-semibold"
+                  />
+                </div>
+
+                {/* Body */}
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Conteúdo da Mensagem (HTML)</label>
+                  <textarea
+                    value={emailBody}
+                    onChange={(e) => setEmailBody(e.target.value)}
+                    rows={8}
+                    className="w-full bg-white border border-gray-250 text-gray-800 rounded-lg p-3 text-xs focus:outline-hidden resize-none font-mono leading-relaxed"
+                  />
+                </div>
+              </div>
+
+              <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-2">
+                <button
+                  onClick={() => setEmailModalLead(null)}
+                  className="px-4 py-2 bg-white border border-gray-200 text-gray-700 font-bold text-xs rounded-lg hover:bg-gray-50 transition-all cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSendEmail}
+                  disabled={sendingEmail}
+                  className="px-4 py-2 bg-[#EA4335] hover:bg-[#d93829] text-white font-bold text-xs rounded-lg flex items-center gap-1.5 transition-all shadow-sm hover:shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{sendingEmail ? "Enviando e-mail..." : "Enviar E-mail via Gmail"}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 3: GOOGLE TASKS SCHEDULER */}
+        {taskModalLead && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+            <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl border border-gray-100 flex flex-col text-left">
+              <div className="bg-emerald-600 p-5 text-white flex justify-between items-center">
+                <div>
+                  <h3 className="text-sm font-bold flex items-center gap-2">
+                    <CheckSquare className="w-4 h-4 text-white" />
+                    <span>Agendar no Google Tarefas</span>
+                  </h3>
+                  <p className="text-[11px] text-emerald-100 mt-0.5">Adiciona um lembrete com prazo na sua lista oficial do Google Tasks</p>
+                </div>
+                <button 
+                  onClick={() => setTaskModalLead(null)}
+                  className="p-1.5 hover:bg-white/10 rounded-lg text-white/80 hover:text-white transition-all cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                {/* Task Title */}
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Título da Tarefa</label>
+                  <input
+                    type="text"
+                    value={taskTitle}
+                    onChange={(e) => setTaskTitle(e.target.value)}
+                    className="w-full bg-white border border-gray-250 text-gray-800 rounded-lg px-3 py-2 text-xs focus:outline-hidden font-bold"
+                  />
+                </div>
+
+                {/* Task Notes */}
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Anotações / Descrição</label>
+                  <textarea
+                    value={taskNotes}
+                    onChange={(e) => setTaskNotes(e.target.value)}
+                    rows={4}
+                    className="w-full bg-white border border-gray-250 text-gray-800 rounded-lg p-3 text-xs focus:outline-hidden resize-none leading-relaxed"
+                  />
+                </div>
+
+                {/* Task Due Date */}
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Data Limite (Due Date)</label>
+                  <input
+                    type="date"
+                    value={taskDueDate}
+                    onChange={(e) => setTaskDueDate(e.target.value)}
+                    className="w-full bg-white border border-gray-250 text-gray-800 rounded-lg px-3 py-2 text-xs focus:outline-hidden font-medium cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-2">
+                <button
+                  onClick={() => setTaskModalLead(null)}
+                  className="px-4 py-2 bg-white border border-gray-200 text-gray-700 font-bold text-xs rounded-lg hover:bg-gray-50 transition-all cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleCreateTask}
+                  disabled={creatingTask}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 transition-all shadow-sm hover:shadow-md cursor-pointer disabled:opacity-50"
+                >
+                  <CheckSquare className="w-3.5 h-3.5" />
+                  <span>{creatingTask ? "Agendando..." : "Criar Tarefa no Google"}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* BOTTOM STATS/FOOTER */}
+        <div className="mt-8 border-t border-gray-200 pt-4 text-center text-[10px] text-gray-400 font-mono flex flex-col sm:flex-row justify-between gap-2">
+          <span>© 2026 SP Assessoria de Recursos Administrativos • Ambiente Restrito</span>
+          <span>Última Sincronização do Servidor: {new Date().toLocaleTimeString("pt-BR")}</span>
+        </div>
       </div>
     </div>
   );
