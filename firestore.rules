@@ -71,6 +71,11 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // TEST COLLECTION RULES FOR CONNECTION DIAGNOSTICS
+    match /test/{docId} {
+      allow get: if isValidId(docId);
+    }
+
     // ADMINS COLLECTION
     match /admins/{adminId} {
       allow read: if isAdmin();

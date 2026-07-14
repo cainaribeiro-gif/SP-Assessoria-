@@ -5,23 +5,17 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 
-// Firebase Imports
-import { initializeApp } from "firebase/app";
-import { 
-  getFirestore, 
-  doc, 
-  getDoc, 
-  setDoc, 
-  collection, 
-  getDocs, 
-  deleteDoc 
-} from "firebase/firestore";
+// Firebase Admin Imports
+import { initializeApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 import firebaseConfig from "./firebase-applet-config.json";
 
 dotenv.config();
 
-// Initialize Firebase SDK
-const firebaseApp = initializeApp(firebaseConfig);
+// Initialize Firebase SDK with Admin privileges to bypass security rules on the server
+const firebaseApp = initializeApp({
+  projectId: firebaseConfig.projectId,
+});
 const db = getFirestore(firebaseApp, (firebaseConfig as any).firestoreDatabaseId);
 
 // Path to site data file (for initial seeding)
@@ -50,11 +44,11 @@ async function startServer() {
   // API endpoint for retrieving site data
   app.get("/api/site-data", async (req, res) => {
     try {
-      const siteDocRef = doc(db, "siteData", "main");
-      const siteDoc = await getDoc(siteDocRef);
+      const siteDocRef = db.collection("siteData").doc("main");
+      const siteDoc = await siteDocRef.get();
       
       let data: any = null;
-      if (siteDoc.exists()) {
+      if (siteDoc.exists) {
         data = siteDoc.data();
       } else {
         // Seeding database if the main siteData document is missing
@@ -66,11 +60,11 @@ async function startServer() {
           delete data.leads; // leads are stored separately
           
           // Save main site configuration document
-          await setDoc(siteDocRef, data);
+          await siteDocRef.set(data);
           
           // Seed the separate leads collection
           for (const lead of initialLeads) {
-            await setDoc(doc(db, "leads", lead.id), lead);
+            await db.collection("leads").doc(lead.id).set(lead);
           }
         } else {
           res.status(500).json({ error: "Dados iniciais não encontrados no servidor." });
@@ -79,8 +73,8 @@ async function startServer() {
       }
 
       // Fetch all leads from Firestore separate collection to include in site-data payload
-      const leadsColRef = collection(db, "leads");
-      const leadsSnapshot = await getDocs(leadsColRef);
+      const leadsColRef = db.collection("leads");
+      const leadsSnapshot = await leadsColRef.get();
       const leadsList: any[] = [];
       leadsSnapshot.forEach((docSnap) => {
         leadsList.push(docSnap.data());
@@ -112,23 +106,23 @@ async function startServer() {
       delete payload.leads;
 
       // 1. Update siteData/main document
-      await setDoc(doc(db, "siteData", "main"), payload);
+      await db.collection("siteData").doc("main").set(payload);
 
       // 2. Synchronize and reconcile separate leads collection
       // Create/Update all leads present in payload
       for (const lead of leadsInPayload) {
         if (lead.id) {
-          await setDoc(doc(db, "leads", lead.id), lead);
+          await db.collection("leads").doc(lead.id).set(lead);
         }
       }
 
       // Handle deletions: Delete leads in Firestore that are absent in incoming payload
-      const leadsColRef = collection(db, "leads");
-      const leadsSnapshot = await getDocs(leadsColRef);
+      const leadsColRef = db.collection("leads");
+      const leadsSnapshot = await leadsColRef.get();
       const payloadLeadIds = new Set(leadsInPayload.map((l: any) => l.id));
       for (const docSnap of leadsSnapshot.docs) {
         if (!payloadLeadIds.has(docSnap.id)) {
-          await deleteDoc(doc(db, "leads", docSnap.id));
+          await db.collection("leads").doc(docSnap.id).delete();
         }
       }
 
@@ -161,7 +155,7 @@ async function startServer() {
       };
 
       // Direct write into separate leads collection
-      await setDoc(doc(db, "leads", newLead.id), newLead);
+      await db.collection("leads").doc(newLead.id).set(newLead);
 
       res.json({ success: true, lead: newLead });
     } catch (error) {
