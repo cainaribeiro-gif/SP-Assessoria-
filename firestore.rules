@@ -1,0 +1,80 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerifiedAdmin() {
+      return isSignedIn() 
+        && request.auth.token.email_verified == true 
+        && (
+          request.auth.token.email == "cainapribeiro@gmail.com" || 
+          request.auth.token.email == "atendimento@sprecursosadm.com.br" ||
+          request.auth.token.email == "admin@spassessoria.com.br"
+        );
+    }
+
+    function isAdmin() {
+      return isEmailVerifiedAdmin() || 
+        (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    // Validates a Lead entity structure safely
+    function isValidLead(data) {
+      return data.get('name', '') is string && data.get('name', '').size() > 0 && data.get('name', '').size() <= 100
+        && data.get('phone', '') is string && data.get('phone', '').size() > 0 && data.get('phone', '').size() <= 30
+        && data.get('email', '') is string && data.get('email', '').size() <= 100
+        && data.get('service', '') is string && data.get('service', '').size() <= 100
+        && data.get('message', '') is string && data.get('message', '').size() <= 2000
+        && data.get('date', '') is string
+        && (data.get('status', 'Novo') == 'Novo' || data.get('status', 'Novo') == 'Em Atendimento' || data.get('status', 'Novo') == 'Concluído')
+        && (data.get('type', 'Contato') == 'Contato' || data.get('type', 'Contato') == 'Orçamento');
+    }
+
+    // LEADS COLLECTION RULES
+    match /leads/{leadId} {
+      allow get: if isAdmin() && isValidId(leadId);
+      allow list: if isAdmin();
+      
+      allow create: if isValidId(leadId) 
+        && isValidLead(incoming()) 
+        && incoming().get('status', 'Novo') == 'Novo';
+      
+      allow update: if isAdmin() 
+        && isValidId(leadId)
+        && isValidLead(incoming());
+        
+      allow delete: if isAdmin() && isValidId(leadId);
+    }
+
+    // SITE CONFIGURATION COLLECTION RULES
+    match /siteData/{docId} {
+      allow get: if isValidId(docId);
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(docId);
+      allow delete: if false;
+    }
+
+    // ADMINS COLLECTION
+    match /admins/{adminId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+  }
+}

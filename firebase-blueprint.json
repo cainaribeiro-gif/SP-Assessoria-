@@ -1,0 +1,93 @@
+{
+  "entities": {
+    "Lead": {
+      "title": "Lead",
+      "description": "User submitted contact or budget request",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the lead"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Full name of the contact"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Email address of the contact"
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "WhatsApp or phone number"
+        },
+        "service": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Service of interest"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Message or details submitted"
+        },
+        "date": {
+          "type": "string",
+          "description": "Date and time of submission"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Novo", "Em Atendimento", "Concluído"],
+          "description": "Status of lead tracking"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["Contato", "Orçamento"],
+          "description": "Type of form submission"
+        }
+      },
+      "required": ["name", "phone"]
+    },
+    "SiteData": {
+      "title": "SiteData",
+      "description": "Unified dynamic layout and text content of the website",
+      "type": "object",
+      "properties": {
+        "siteConfig": {
+          "type": "object",
+          "description": "General site config including phones, email, hero titles"
+        },
+        "services": {
+          "type": "object",
+          "description": "Abas and service descriptions mapping"
+        },
+        "faqs": {
+          "type": "array",
+          "description": "List of FAQ items"
+        },
+        "blogPosts": {
+          "type": "array",
+          "description": "List of blog posts"
+        },
+        "reviews": {
+          "type": "array",
+          "description": "List of client reviews"
+        }
+      },
+      "required": ["siteConfig", "services", "faqs", "blogPosts", "reviews"]
+    }
+  },
+  "firestore": {
+    "/leads/{leadId}": {
+      "schema": "Lead",
+      "description": "Collection of visitor requests and leads"
+    },
+    "/siteData/{docId}": {
+      "schema": "SiteData",
+      "description": "Document holding all dynamic site configuration"
+    }
+  }
+}

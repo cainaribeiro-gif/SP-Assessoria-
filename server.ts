@@ -5,13 +5,30 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 
+// Firebase Imports
+import { initializeApp } from "firebase/app";
+import { 
+  getFirestore, 
+  doc, 
+  getDoc, 
+  setDoc, 
+  collection, 
+  getDocs, 
+  deleteDoc 
+} from "firebase/firestore";
+import firebaseConfig from "./firebase-applet-config.json";
+
 dotenv.config();
 
-// Path to site data
+// Initialize Firebase SDK
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+
+// Path to site data file (for initial seeding)
 const SITE_DATA_PATH = path.join(process.cwd(), "src", "site-data.json");
 
-// Helper to read site data
-function readSiteData(): any {
+// Helper to read initial file data for seeding
+function readSiteDataFile(): any {
   try {
     if (fs.existsSync(SITE_DATA_PATH)) {
       const raw = fs.readFileSync(SITE_DATA_PATH, "utf-8");
@@ -23,17 +40,6 @@ function readSiteData(): any {
   return null;
 }
 
-// Helper to write site data
-function writeSiteData(data: any): boolean {
-  try {
-    fs.writeFileSync(SITE_DATA_PATH, JSON.stringify(data, null, 2), "utf-8");
-    return true;
-  } catch (error) {
-    console.error("Erro ao salvar site-data.json:", error);
-    return false;
-  }
-}
-
 async function startServer() {
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
@@ -42,62 +48,125 @@ async function startServer() {
   app.use(express.json());
 
   // API endpoint for retrieving site data
-  app.get("/api/site-data", (req, res) => {
-    const data = readSiteData();
-    if (data) {
+  app.get("/api/site-data", async (req, res) => {
+    try {
+      const siteDocRef = doc(db, "siteData", "main");
+      const siteDoc = await getDoc(siteDocRef);
+      
+      let data: any = null;
+      if (siteDoc.exists()) {
+        data = siteDoc.data();
+      } else {
+        // Seeding database if the main siteData document is missing
+        console.log("Firestore empty. Seeding site data from local JSON file...");
+        const seedData = readSiteDataFile();
+        if (seedData) {
+          data = { ...seedData };
+          const initialLeads = data.leads || [];
+          delete data.leads; // leads are stored separately
+          
+          // Save main site configuration document
+          await setDoc(siteDocRef, data);
+          
+          // Seed the separate leads collection
+          for (const lead of initialLeads) {
+            await setDoc(doc(db, "leads", lead.id), lead);
+          }
+        } else {
+          res.status(500).json({ error: "Dados iniciais não encontrados no servidor." });
+          return;
+        }
+      }
+
+      // Fetch all leads from Firestore separate collection to include in site-data payload
+      const leadsColRef = collection(db, "leads");
+      const leadsSnapshot = await getDocs(leadsColRef);
+      const leadsList: any[] = [];
+      leadsSnapshot.forEach((docSnap) => {
+        leadsList.push(docSnap.data());
+      });
+
+      // Sort leads by date descending or by ID
+      leadsList.sort((a, b) => {
+        const dateA = a.date ? new Date(a.date.replace(/,/, "")).getTime() : 0;
+        const dateB = b.date ? new Date(b.date.replace(/,/, "")).getTime() : 0;
+        return dateB - dateA || b.id.localeCompare(a.id);
+      });
+
+      // Merge separate leads collection back into response body for complete backwards compatibility
+      data.leads = leadsList;
       res.json(data);
-    } else {
-      res.status(500).json({ error: "Não foi possível carregar as informações do site." });
+    } catch (error) {
+      console.error("Erro ao carregar dados do Firestore:", error);
+      res.status(500).json({ error: "Erro ao buscar dados do banco de dados na nuvem." });
     }
   });
 
   // API endpoint for saving modified site data (Admin)
-  app.post("/api/site-data", (req, res) => {
-    const success = writeSiteData(req.body);
-    if (success) {
-      res.json({ success: true, message: "Informações salvas com sucesso!" });
-    } else {
-      res.status(500).json({ error: "Erro ao salvar as informações no servidor." });
+  app.post("/api/site-data", async (req, res) => {
+    try {
+      const payload = { ...req.body };
+      const leadsInPayload = payload.leads || [];
+      
+      // Leads are stored in their own collection, strip them from siteData/main document
+      delete payload.leads;
+
+      // 1. Update siteData/main document
+      await setDoc(doc(db, "siteData", "main"), payload);
+
+      // 2. Synchronize and reconcile separate leads collection
+      // Create/Update all leads present in payload
+      for (const lead of leadsInPayload) {
+        if (lead.id) {
+          await setDoc(doc(db, "leads", lead.id), lead);
+        }
+      }
+
+      // Handle deletions: Delete leads in Firestore that are absent in incoming payload
+      const leadsColRef = collection(db, "leads");
+      const leadsSnapshot = await getDocs(leadsColRef);
+      const payloadLeadIds = new Set(leadsInPayload.map((l: any) => l.id));
+      for (const docSnap of leadsSnapshot.docs) {
+        if (!payloadLeadIds.has(docSnap.id)) {
+          await deleteDoc(doc(db, "leads", docSnap.id));
+        }
+      }
+
+      res.json({ success: true, message: "Informações salvas e sincronizadas com sucesso!" });
+    } catch (error) {
+      console.error("Erro ao salvar dados no Firestore:", error);
+      res.status(500).json({ error: "Erro ao salvar informações no banco de dados na nuvem." });
     }
   });
 
   // API endpoint for submitting a lead (Contact Form or Budget Modal)
-  app.post("/api/leads", (req, res) => {
-    const data = readSiteData();
-    if (!data) {
-      res.status(500).json({ error: "Erro ao carregar banco de dados de leads." });
-      return;
-    }
+  app.post("/api/leads", async (req, res) => {
+    try {
+      const { name, email, phone, service, message, type } = req.body;
+      if (!name || !phone) {
+        res.status(400).json({ error: "Nome e WhatsApp são obrigatórios." });
+        return;
+      }
 
-    const { name, email, phone, service, message, type } = req.body;
-    if (!name || !phone) {
-      res.status(400).json({ error: "Nome e WhatsApp são obrigatórios." });
-      return;
-    }
+      const newLead = {
+        id: `lead-${Date.now()}`,
+        name,
+        email: email || "",
+        phone,
+        service: service || "Geral",
+        message: message || "",
+        date: new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+        status: "Novo",
+        type: type || "Contato"
+      };
 
-    const newLead = {
-      id: `lead-${Date.now()}`,
-      name,
-      email: email || "",
-      phone,
-      service: service || "Geral",
-      message: message || "",
-      date: new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
-      status: "Novo",
-      type: type || "Contato"
-    };
+      // Direct write into separate leads collection
+      await setDoc(doc(db, "leads", newLead.id), newLead);
 
-    if (!data.leads) {
-      data.leads = [];
-    }
-
-    data.leads.unshift(newLead);
-    const success = writeSiteData(data);
-
-    if (success) {
       res.json({ success: true, lead: newLead });
-    } else {
-      res.status(500).json({ error: "Erro ao salvar o lead no servidor." });
+    } catch (error) {
+      console.error("Erro ao criar lead no Firestore:", error);
+      res.status(500).json({ error: "Erro ao registrar solicitação no banco de dados." });
     }
   });
 
@@ -126,7 +195,6 @@ async function startServer() {
 
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
-        // Fallback simulated response if no API key is provided
         const lastUserMessage = messages[messages.length - 1]?.content || "";
         const fallbackText = `Olá! Sou o Assistente Virtual da SP Assessoria. No momento, nossa API de inteligência artificial está em modo de demonstração. 
 
@@ -150,9 +218,6 @@ Como posso ajudar você hoje com seus recursos administrativos?`;
         },
       });
 
-      // Prepare conversation history for Gemini API
-      // Since GoogleGenAI SDK chats.create or generateContent can take contents,
-      // let's construct the contents array from user messages
       const systemInstruction = `Você é o Assistente Virtual Inteligente da "SP Assessoria de Recursos Administrativos".
 Seu objetivo é ajudar potenciais clientes com dúvidas gerais sobre recursos administrativos do INSS (como defesas de indeferimentos, revisões administrativas, cumprimento de exigências, BPC/LOAS), trânsito (como recursos de multas, suspensão e cassação de CNH), e outros serviços administrativos em órgãos públicos.
 
@@ -163,7 +228,6 @@ Instruções importantes:
 4. Se o usuário quiser contratar um serviço ou solicitar um orçamento formal, convide-o a clicar no botão "Solicitar Orçamento" ou a entrar em contato pelo WhatsApp (11) 98704-9051 ou (11) 99334-4293.
 5. Responda em português (do Brasil). Use uma formatação bonita em Markdown (com negritos, listas, etc.) para facilitar a leitura. Mantenha as respostas concisas, de no máximo 3 parágrafos curtos.`;
 
-      // Map roles to "user" or "model"
       const contents = messages.map((m: any) => {
         return {
           role: m.role === "assistant" ? "model" : "user",
