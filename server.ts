@@ -37,6 +37,61 @@ function readSiteDataFile(): any {
   return null;
 }
 
+// Helper to write updated site data to the local file
+function writeSiteDataFile(data: any): void {
+  try {
+    fs.writeFileSync(SITE_DATA_PATH, JSON.stringify(data, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Erro ao gravar site-data.json:", error);
+  }
+}
+
+// Path to leads offline backup
+const LEADS_BACKUP_PATH = path.join(process.cwd(), "src", "leads-backup.json");
+
+// Helper to read locally backed up leads
+function readLeadsBackup(): any[] {
+  try {
+    if (fs.existsSync(LEADS_BACKUP_PATH)) {
+      const raw = fs.readFileSync(LEADS_BACKUP_PATH, "utf-8");
+      return JSON.parse(raw);
+    }
+  } catch (error) {
+    console.error("Erro ao ler leads-backup.json:", error);
+  }
+  return [];
+}
+
+// Helper to write offline leads backup
+function writeLeadsBackup(leads: any[]): void {
+  try {
+    fs.writeFileSync(LEADS_BACKUP_PATH, JSON.stringify(leads, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Erro ao gravar leads-backup.json:", error);
+  }
+}
+
+// Helper to synchronize locally saved leads to Firestore when connection is available
+async function syncOfflineLeads(): Promise<void> {
+  const offlineLeads = readLeadsBackup();
+  if (offlineLeads.length === 0) return;
+
+  console.log(`[Sync] Encontrados ${offlineLeads.length} leads salvos offline para sincronizar...`);
+  const remainingLeads: any[] = [];
+
+  for (const lead of offlineLeads) {
+    try {
+      await adminDb.collection("leads").doc(lead.id).set(lead);
+      console.log(`[Sync] Lead offline ${lead.id} sincronizado com sucesso.`);
+    } catch (err) {
+      console.warn(`[Sync] Falha ao sincronizar lead ${lead.id}, mantendo no backup:`, err);
+      remainingLeads.push(lead);
+    }
+  }
+
+  writeLeadsBackup(remainingLeads);
+}
+
 // Interfaces & Middlewares for Security
 export interface AuthenticatedRequest extends express.Request {
   user?: {
@@ -82,50 +137,65 @@ async function requireAuth(req: AuthenticatedRequest, res: express.Response, nex
     const uid = decodedToken.uid;
     const email = decodedToken.email || "";
 
-    // Fetch profile from Firestore profiles collection
-    const profileRef = adminDb.collection("profiles").doc(uid);
-    let profileSnap = await profileRef.get();
-
+    // Fetch profile from Firestore profiles collection with resilient fallback
     let role = "cliente";
     let active = true;
+    let displayName = decodedToken.name || email.split("@")[0] || "Cliente";
 
-    if (!profileSnap.exists) {
-      // Auto-provision admin profile if it matches the designated admins
+    try {
+      const profileRef = adminDb.collection("profiles").doc(uid);
+      let profileSnap = await profileRef.get();
+
+      if (!profileSnap.exists) {
+        // Auto-provision admin profile if it matches the designated admins
+        const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com"];
+        if (adminEmails.includes(email.toLowerCase())) {
+          role = "admin";
+          await profileRef.set({
+            role,
+            active: true,
+            displayName: email.toLowerCase() === "atendimento.spassessoria@gmail.com" ? "SP Assessoria Admin" : "Cainã Ribeiro",
+            email: email,
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp()
+          });
+        } else {
+          // Create a default client profile
+          await profileRef.set({
+            role: "cliente",
+            active: true,
+            displayName,
+            email: email,
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp()
+          });
+        }
+        profileSnap = await profileRef.get();
+      }
+
+      const profileData = profileSnap.data();
+      if (!profileData || profileData.active === false) {
+        return res.status(403).json({ error: "Acesso negado: Conta inativa ou sem permissão." });
+      }
+
+      role = profileData.role || "cliente";
+      active = profileData.active !== false;
+    } catch (firestoreError) {
+      console.warn("[Firestore Warning] Error loading profile from Firestore. Using secure offline fallback:", firestoreError);
       const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com"];
       if (adminEmails.includes(email.toLowerCase())) {
         role = "admin";
-        await profileRef.set({
-          role,
-          active: true,
-          displayName: email.toLowerCase() === "atendimento.spassessoria@gmail.com" ? "SP Assessoria Admin" : "Cainã Ribeiro",
-          email: email,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp()
-        });
       } else {
-        // Create a default client profile
-        await profileRef.set({
-          role: "cliente",
-          active: true,
-          displayName: decodedToken.name || email.split("@")[0] || "Cliente",
-          email: email,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp()
-        });
+        role = "cliente";
       }
-      profileSnap = await profileRef.get();
-    }
-
-    const profileData = profileSnap.data();
-    if (!profileData || profileData.active === false) {
-      return res.status(403).json({ error: "Acesso negado: Conta inativa ou sem permissão." });
+      active = true;
     }
 
     req.user = {
       uid,
       email,
-      role: profileData.role || "cliente",
-      active: profileData.active
+      role,
+      active
     };
 
     next();
@@ -214,32 +284,42 @@ async function startServer() {
   // 1. GET /api/site-data: Public access with EXPLICIT whitelisted fields (no leads, no private data)
   app.get("/api/site-data", async (req, res) => {
     try {
-      const siteDocRef = adminDb.collection("siteData").doc("main");
-      const siteDoc = await siteDocRef.get();
-      
       let rawData: any = null;
-      if (siteDoc.exists) {
-        rawData = siteDoc.data();
-      } else {
-        console.log("Firestore empty. Seeding site data from local JSON file...");
-        const seedData = readSiteDataFile();
-        if (seedData) {
-          rawData = { ...seedData };
-          const initialLeads = rawData.leads || [];
-          delete rawData.leads; // leads are stored separately
-          
-          await siteDocRef.set(rawData);
-          
-          // Seed the separate leads collection
-          for (const lead of initialLeads) {
-            if (lead.id) {
-              await adminDb.collection("leads").doc(lead.id).set(lead);
+
+      try {
+        const siteDocRef = adminDb.collection("siteData").doc("main");
+        const siteDoc = await siteDocRef.get();
+        
+        if (siteDoc.exists) {
+          rawData = siteDoc.data();
+          // Trigger offline leads synchronization in the background since connection is working
+          syncOfflineLeads().catch(err => console.error("Error in background syncOfflineLeads:", err));
+        } else {
+          console.log("Firestore empty. Seeding site data from local JSON file...");
+          const seedData = readSiteDataFile();
+          if (seedData) {
+            rawData = { ...seedData };
+            const initialLeads = rawData.leads || [];
+            delete rawData.leads; // leads are stored separately
+            
+            await siteDocRef.set(rawData);
+            
+            // Seed the separate leads collection
+            for (const lead of initialLeads) {
+              if (lead.id) {
+                await adminDb.collection("leads").doc(lead.id).set(lead);
+              }
             }
           }
-        } else {
-          res.status(500).json({ error: "Dados iniciais não encontrados no servidor." });
-          return;
         }
+      } catch (firestoreError) {
+        console.warn("[Firestore Warning] Error loading from Firestore, falling back to local file:", firestoreError);
+        rawData = readSiteDataFile();
+      }
+
+      if (!rawData) {
+        res.status(500).json({ error: "Dados iniciais não encontrados no servidor." });
+        return;
       }
 
       // Explicitly Whitelist Only Public Fields!
@@ -263,7 +343,7 @@ async function startServer() {
 
       res.json(publicData);
     } catch (error) {
-      console.error("Erro ao carregar dados do Firestore:", error);
+      console.error("Erro geral no endpoint site-data:", error);
       res.status(500).json({ error: "Erro ao buscar dados do banco de dados na nuvem." });
     }
   });
@@ -325,8 +405,15 @@ async function startServer() {
         lgpdConsent: cleanConsent
       };
 
-      await adminDb.collection("leads").doc(leadId).set(newLead);
-      console.log(`[Lead Created] ID=${leadId} Service=${cleanService} Type=${cleanType} Consent=${cleanConsent}`);
+      try {
+        await adminDb.collection("leads").doc(leadId).set(newLead);
+        console.log(`[Lead Created] ID=${leadId} Service=${cleanService} Type=${cleanType} Consent=${cleanConsent}`);
+      } catch (firestoreError) {
+        console.warn("[Firestore Warning] Error creating lead in Firestore, saving to local backup instead:", firestoreError);
+        const currentBackup = readLeadsBackup();
+        currentBackup.push(newLead);
+        writeLeadsBackup(currentBackup);
+      }
 
       res.json({ success: true, message: "Solicitação recebida com sucesso." });
     } catch (error) {
@@ -352,12 +439,17 @@ async function startServer() {
   // 2. GET /api/admin/leads: Retrieve leads strictly for administrative profiles
   app.get("/api/admin/leads", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const leadsColRef = adminDb.collection("leads");
-      const leadsSnapshot = await leadsColRef.get();
-      const leadsList: any[] = [];
-      leadsSnapshot.forEach((docSnap) => {
-        leadsList.push(docSnap.data());
-      });
+      let leadsList: any[] = [];
+      try {
+        const leadsColRef = adminDb.collection("leads");
+        const leadsSnapshot = await leadsColRef.get();
+        leadsSnapshot.forEach((docSnap) => {
+          leadsList.push(docSnap.data());
+        });
+      } catch (firestoreError) {
+        console.warn("[Firestore Warning] Error loading leads from Firestore, using offline backups:", firestoreError);
+        leadsList = readLeadsBackup();
+      }
 
       // Sort leads by date descending
       leadsList.sort((a, b) => {
@@ -382,26 +474,38 @@ async function startServer() {
       // Strip leads from the main siteData document
       delete payload.leads;
 
-      // Update main site content
-      await adminDb.collection("siteData").doc("main").set(payload);
+      // Update local file immediately (for ultimate persistence and resilience)
+      const currentLocalData = readSiteDataFile() || {};
+      const updatedLocalData = {
+        ...currentLocalData,
+        ...payload
+      };
+      writeSiteDataFile(updatedLocalData);
 
-      // Reconcile and synchronize leads if present in payload
-      if (leadsInPayload.length > 0) {
-        for (const lead of leadsInPayload) {
-          if (lead.id) {
-            await adminDb.collection("leads").doc(lead.id).set(lead);
+      try {
+        // Update main site content in Firestore
+        await adminDb.collection("siteData").doc("main").set(payload);
+
+        // Reconcile and synchronize leads if present in payload
+        if (leadsInPayload.length > 0) {
+          for (const lead of leadsInPayload) {
+            if (lead.id) {
+              await adminDb.collection("leads").doc(lead.id).set(lead);
+            }
+          }
+
+          // Handle deletions of leads not present in payload
+          const leadsColRef = adminDb.collection("leads");
+          const leadsSnapshot = await leadsColRef.get();
+          const payloadLeadIds = new Set(leadsInPayload.map((l: any) => l.id));
+          for (const docSnap of leadsSnapshot.docs) {
+            if (!payloadLeadIds.has(docSnap.id)) {
+              await adminDb.collection("leads").doc(docSnap.id).delete();
+            }
           }
         }
-
-        // Handle deletions of leads not present in payload
-        const leadsColRef = adminDb.collection("leads");
-        const leadsSnapshot = await leadsColRef.get();
-        const payloadLeadIds = new Set(leadsInPayload.map((l: any) => l.id));
-        for (const docSnap of leadsSnapshot.docs) {
-          if (!payloadLeadIds.has(docSnap.id)) {
-            await adminDb.collection("leads").doc(docSnap.id).delete();
-          }
-        }
+      } catch (firestoreError) {
+        console.warn("[Firestore Warning] Error saving content to Firestore, saved locally instead:", firestoreError);
       }
 
       // Record administrative action in Audit Log
