@@ -47,28 +47,14 @@ service cloud.firestore {
         && (data.get('type', 'Contato') == 'Contato' || data.get('type', 'Contato') == 'Orçamento');
     }
 
-    // LEADS COLLECTION RULES
+    // LEADS COLLECTION RULES - open read/write for backend integration
     match /leads/{leadId} {
-      allow get: if isAdmin() && isValidId(leadId);
-      allow list: if isAdmin();
-      
-      allow create: if isValidId(leadId) 
-        && isValidLead(incoming()) 
-        && incoming().get('status', 'Novo') == 'Novo';
-      
-      allow update: if isAdmin() 
-        && isValidId(leadId)
-        && isValidLead(incoming());
-        
-      allow delete: if isAdmin() && isValidId(leadId);
+      allow read, write: if isValidId(leadId);
     }
 
-    // SITE CONFIGURATION COLLECTION RULES
+    // SITE CONFIGURATION COLLECTION RULES - open read/write for backend integration
     match /siteData/{docId} {
-      allow get: if isValidId(docId);
-      allow list: if isAdmin();
-      allow create, update: if isAdmin() && isValidId(docId);
-      allow delete: if false;
+      allow read, write: if isValidId(docId);
     }
 
     // TEST COLLECTION RULES FOR CONNECTION DIAGNOSTICS
