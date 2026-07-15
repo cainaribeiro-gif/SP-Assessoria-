@@ -49,12 +49,12 @@ service cloud.firestore {
 
     // LEADS COLLECTION RULES - open read/write for backend integration
     match /leads/{leadId} {
-      allow read, write: if isValidId(leadId);
+      allow read, write: if true;
     }
 
     // SITE CONFIGURATION COLLECTION RULES - open read/write for backend integration
     match /siteData/{docId} {
-      allow read, write: if isValidId(docId);
+      allow read, write: if true;
     }
 
     // TEST COLLECTION RULES FOR CONNECTION DIAGNOSTICS
