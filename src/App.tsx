@@ -40,6 +40,7 @@ import { AdminDashboard } from "./components/AdminDashboard";
 import { Logo } from "./components/Logo";
 import defaultSiteData from "./site-data.json";
 import { ServiceItem, BlogPost, FAQItem, Review, ProcessStatus, TimelineStep } from "./types";
+import { auth } from "./firebase";
 
 // Static content for the landing page
 const SERVICES: Record<"inss" | "transito" | "administrativo", ServiceItem> = {
@@ -295,11 +296,12 @@ export default function App() {
       localStorage.setItem("sp_site_data", JSON.stringify(newData));
       setSiteData(newData);
       
+      const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : "";
       const response = await fetch("/api/site-data", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${localStorage.getItem("admin_token") || ""}`
+          "Authorization": `Bearer ${idToken}`
         },
         body: JSON.stringify(newData)
       });
@@ -353,6 +355,7 @@ export default function App() {
   const [contactPhone, setContactPhone] = useState("");
   const [contactService, setContactService] = useState("Geral");
   const [contactMessage, setContactMessage] = useState("");
+  const [contactWebsite, setContactWebsite] = useState("");
   const [contactSuccess, setContactSuccess] = useState(false);
 
   // Derive dynamic configuration with robust fallback
@@ -438,36 +441,41 @@ export default function App() {
     e.preventDefault();
     if (!contactName || !contactPhone) return;
 
-    const leadData = {
-      id: `lead-${Date.now()}`,
+    // Honeypot bot protection
+    if (contactWebsite) {
+      console.warn("Spam check triggered");
+      setContactSuccess(true);
+      return;
+    }
+
+    const payload = {
       name: contactName,
       email: contactEmail,
       phone: contactPhone,
       service: contactService,
       message: contactMessage,
       type: "Contato",
-      status: "Novo",
-      date: new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })
+      lgpdConsent: true,
+      website: contactWebsite
     };
 
-    // Store lead locally immediately for static hosts
-    const updatedLeads = [leadData, ...(siteData.leads || [])];
-    const updatedData = { ...siteData, leads: updatedLeads };
-    setSiteData(updatedData);
-    localStorage.setItem("sp_site_data", JSON.stringify(updatedData));
-
-    // Submit lead to our database API
+    // Submit lead to our secure database API
     fetch("/api/leads", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(leadData)
+      body: JSON.stringify(payload)
     })
-    .then(() => {
-      fetchSiteData(); // Refresh local list
-    })
-    .catch(err => console.warn("Erro ao registrar lead de contato no servidor, mantido localmente:", err));
+    .catch(err => console.warn("Erro ao registrar lead de contato no servidor:", err));
 
     setContactSuccess(true);
+    
+    // Clear form
+    setContactName("");
+    setContactEmail("");
+    setContactPhone("");
+    setContactMessage("");
+    setContactWebsite("");
+
     const phone = siteConfigData.phone;
     const text = `Olá SP Assessoria, acabo de enviar meu contato pelo formulário do site:\n\n*Nome:* ${contactName}\n*E-mail:* ${contactEmail || "Não informado"}\n*Telefone:* ${contactPhone}\n*Área de Interesse:* ${contactService}\n*Mensagem:* ${contactMessage || "Sem mensagem"}`;
     const encoded = encodeURIComponent(text);
@@ -1654,6 +1662,19 @@ export default function App() {
                         rows={4}
                         placeholder="Escreva brevemente o ocorrido para agilizarmos sua triagem..."
                         className="w-full bg-gray-50 border border-gray-250 rounded-lg px-4 py-3 text-xs text-gray-800 placeholder-gray-450 focus:outline-hidden focus:border-brand-gold-500 focus:bg-white resize-none"
+                      />
+                    </div>
+
+                    {/* Honeypot field - visually hidden */}
+                    <div className="hidden" aria-hidden="true">
+                      <label className="block text-[10px] uppercase font-bold text-gray-600 tracking-wider mb-1">Website</label>
+                      <input
+                        type="text"
+                        tabIndex={-1}
+                        value={contactWebsite}
+                        onChange={(e) => setContactWebsite(e.target.value)}
+                        placeholder="Deixe em branco se for humano"
+                        autoComplete="off"
                       />
                     </div>
 

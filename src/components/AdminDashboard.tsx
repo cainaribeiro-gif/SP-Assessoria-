@@ -1,5 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { signInWithPopup, GoogleAuthProvider, signOut } from "firebase/auth";
+import { 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  signOut,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail
+} from "firebase/auth";
 import { auth } from "../firebase";
 import { 
   setWorkspaceToken, 
@@ -178,29 +184,81 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     }
   }, [siteData]);
 
+  const fetchLeads = async (token: string) => {
+    try {
+      const response = await fetch("/api/admin/leads", {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setLocalLeads(data);
+      } else {
+        console.error("Erro ao carregar leads do servidor.");
+      }
+    } catch (err) {
+      console.error("Erro de conexão ao buscar leads:", err);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!username.trim()) {
+      setLoginError("Por favor, digite seu e-mail no campo acima para receber o link de recuperação.");
+      return;
+    }
+    setLoginError("");
+    try {
+      await sendPasswordResetEmail(auth, username.trim());
+      setLoginError("E-mail de recuperação enviado com sucesso! Verifique sua caixa de entrada.");
+    } catch (err: any) {
+      console.error(err);
+      let errMsg = "Erro ao enviar e-mail de recuperação.";
+      if (err.code === "auth/user-not-found" || err.code === "auth/invalid-email") {
+        errMsg = "E-mail de usuário inválido ou não cadastrado.";
+      } else {
+        errMsg = err.message || String(err);
+      }
+      setLoginError(errMsg);
+    }
+  };
+
   // Check login session
   useEffect(() => {
-    const token = localStorage.getItem("sp_admin_token");
-    if (token === "sp_admin_token_2026_secured") {
-      setIsLoggedIn(true);
-    }
-    
     setIsGoogleConnected(isWorkspaceConnected());
 
     // Connect Firebase Auth state change listener
-    const unsubscribe = auth.onAuthStateChanged((user) => {
+    const unsubscribe = auth.onAuthStateChanged(async (user) => {
       if (user) {
-        const email = user.email || "";
-        const allowedAdmins = [
-          "cainapribeiro@gmail.com",
-          "atendimento@sprecursosadm.com.br",
-          "admin@spassessoria.com.br"
-        ];
-        if (allowedAdmins.includes(email.toLowerCase())) {
-          setIsLoggedIn(true);
-          localStorage.setItem("sp_admin_token", "sp_admin_token_2026_secured");
-          setGoogleUserEmail(email);
+        try {
+          const idToken = await user.getIdToken();
+          const response = await fetch("/api/admin/profile", {
+            headers: {
+              "Authorization": `Bearer ${idToken}`
+            }
+          });
+          if (response.ok) {
+            const profile = await response.json();
+            const allowedRoles = ["admin", "gestor", "supervisor", "analista", "atendente", "financeiro", "marketing"];
+            if (profile.active && allowedRoles.includes(profile.role)) {
+              setIsLoggedIn(true);
+              setGoogleUserEmail(user.email || "");
+              fetchLeads(idToken);
+            } else {
+              setLoginError("Acesso negado: Perfil inativo ou sem permissão de acesso ao painel.");
+              setIsLoggedIn(false);
+              await signOut(auth);
+            }
+          } else {
+            setIsLoggedIn(false);
+            await signOut(auth);
+          }
+        } catch (err) {
+          console.error("Erro ao carregar perfil do usuário:", err);
+          setIsLoggedIn(false);
         }
+      } else {
+        setIsLoggedIn(false);
       }
     });
     return () => unsubscribe();
@@ -218,23 +276,32 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     try {
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
-      const email = user.email || "";
-      const allowedAdmins = [
-        "cainapribeiro@gmail.com",
-        "atendimento@sprecursosadm.com.br",
-        "admin@spassessoria.com.br"
-      ];
-      if (allowedAdmins.includes(email.toLowerCase())) {
-        const credential = GoogleAuthProvider.credentialFromResult(result);
-        if (credential?.accessToken) {
-          setWorkspaceToken(credential.accessToken);
-          setIsGoogleConnected(true);
-          setGoogleUserEmail(email);
+      const idToken = await user.getIdToken();
+
+      const response = await fetch("/api/admin/profile", {
+        headers: {
+          "Authorization": `Bearer ${idToken}`
         }
-        localStorage.setItem("sp_admin_token", "sp_admin_token_2026_secured");
-        setIsLoggedIn(true);
+      });
+
+      if (response.ok) {
+        const profile = await response.json();
+        const allowedRoles = ["admin", "gestor", "supervisor", "analista", "atendente", "financeiro", "marketing"];
+        if (profile.active && allowedRoles.includes(profile.role)) {
+          const credential = GoogleAuthProvider.credentialFromResult(result);
+          if (credential?.accessToken) {
+            setWorkspaceToken(credential.accessToken);
+            setIsGoogleConnected(true);
+            setGoogleUserEmail(user.email || "");
+          }
+          setIsLoggedIn(true);
+          fetchLeads(idToken);
+        } else {
+          setLoginError("Acesso negado: Conta inativa ou sem permissão para acessar o painel.");
+          await signOut(auth);
+        }
       } else {
-        setLoginError("Acesso negado: O e-mail " + email + " não está cadastrado como administrador.");
+        setLoginError("Acesso negado: E-mail não cadastrado como administrador.");
         await signOut(auth);
       }
     } catch (err: any) {
@@ -247,47 +314,57 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     e.preventDefault();
     setLoginError("");
 
-    const normUsername = username.trim().toLowerCase();
+    const normEmail = username.trim().toLowerCase();
     const normPassword = password.trim();
 
-    const isMasterUser = (normUsername === "atendimento@sprecursosadm.com.br" && normPassword === "@Shafiraepablo") ||
-                         (normUsername === "admin" && normPassword === "@Shafiraepablo");
-
-    if (isMasterUser) {
-      localStorage.setItem("sp_admin_token", "sp_admin_token_2026_secured");
-      setIsLoggedIn(true);
-      setUsername("");
-      setPassword("");
+    if (!normEmail || !normPassword) {
+      setLoginError("E-mail e senha são obrigatórios.");
       return;
     }
 
     try {
-      const response = await fetch("/api/admin/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: normUsername, password: normPassword })
+      const userCredential = await signInWithEmailAndPassword(auth, normEmail, normPassword);
+      const user = userCredential.user;
+      const idToken = await user.getIdToken();
+
+      const response = await fetch("/api/admin/profile", {
+        headers: {
+          "Authorization": `Bearer ${idToken}`
+        }
       });
-      const contentType = response.headers.get("content-type");
-      if (response.ok && contentType && contentType.includes("application/json")) {
-        const data = await response.json();
-        if (data.success) {
-          localStorage.setItem("sp_admin_token", data.token);
+
+      if (response.ok) {
+        const profile = await response.json();
+        const allowedRoles = ["admin", "gestor", "supervisor", "analista", "atendente", "financeiro", "marketing"];
+        if (profile.active && allowedRoles.includes(profile.role)) {
           setIsLoggedIn(true);
+          setGoogleUserEmail(user.email || "");
           setUsername("");
           setPassword("");
+          fetchLeads(idToken);
         } else {
-          setLoginError(data.error || "Credenciais inválidas");
+          setLoginError("Acesso negado: Perfil inativo ou sem permissão de acesso ao painel.");
+          await signOut(auth);
         }
       } else {
-        setLoginError("Credenciais inválidas");
+        setLoginError("Acesso negado: Perfil não registrado ou inativo.");
+        await signOut(auth);
       }
-    } catch (err) {
-      setLoginError("Erro de conexão com o servidor.");
+    } catch (err: any) {
+      console.error(err);
+      let errMsg = "Erro de autenticação.";
+      if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
+        errMsg = "E-mail ou senha incorretos.";
+      } else if (err.code === "auth/invalid-email") {
+        errMsg = "E-mail inválido.";
+      } else {
+        errMsg = err.message || String(err);
+      }
+      setLoginError(errMsg);
     }
   };
 
   const handleLogout = async () => {
-    localStorage.removeItem("sp_admin_token");
     clearWorkspaceToken();
     setIsGoogleConnected(false);
     setGoogleUserEmail(null);
@@ -305,9 +382,13 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
       // Guard local storage first for resilience
       localStorage.setItem("sp_site_data", JSON.stringify(updatedData));
       
+      const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : "";
       const response = await fetch("/api/site-data", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${idToken}`
+        },
         body: JSON.stringify(updatedData)
       });
       
@@ -689,11 +770,11 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                   <div className="relative">
                     <User className="absolute left-3 top-3 w-4 h-4 text-gray-450" />
                     <input
-                      type="text"
+                      type="email"
                       required
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      placeholder="Ex: atendimento@sprecursosadm.com.br"
+                      placeholder="Ex: atendimento.spassessoria@gmail.com"
                       className="w-full bg-gray-50 border border-gray-250 text-gray-800 rounded-lg pl-10 pr-4 py-2.5 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
                     />
                   </div>
@@ -701,7 +782,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
 
                 <div>
                   <label className="block text-[10px] text-gray-500 font-bold uppercase tracking-wider text-left mb-1">Senha de Acesso</label>
-                  <div className="relative">
+                  <div className="relative font-sans">
                     <Lock className="absolute left-3 top-3 w-4 h-4 text-gray-450" />
                     <input
                       type="password"
@@ -711,6 +792,15 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                       placeholder="••••••••••••"
                       className="w-full bg-gray-50 border border-gray-250 text-gray-800 rounded-lg pl-10 pr-4 py-2.5 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
                     />
+                  </div>
+                  <div className="text-right mt-1.5">
+                    <button
+                      type="button"
+                      onClick={handlePasswordReset}
+                      className="text-[10px] text-brand-gold-600 hover:text-brand-gold-700 font-bold hover:underline cursor-pointer"
+                    >
+                      Esqueceu sua senha? Recupere aqui
+                    </button>
                   </div>
                 </div>
 

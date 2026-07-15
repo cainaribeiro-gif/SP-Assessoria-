@@ -1,71 +1,39 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Global default-deny catch-all
+    // Default closed rule: reject all read and write requests across all collections
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Helper functions
-    function isSignedIn() {
-      return request.auth != null;
+    // User Profile Rules
+    // Users can read only their own profile document.
+    // Only administrators (defined by the 'role' field in their profile) can list or manage profiles.
+    match /profiles/{uid} {
+      allow read: if request.auth != null && (
+        request.auth.uid == uid || 
+        get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.role == 'admin'
+      );
+      allow write: if request.auth != null && 
+        get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.role == 'admin';
     }
 
-    function isEmailVerifiedAdmin() {
-      return isSignedIn() 
-        && request.auth.token.email_verified == true 
-        && (
-          request.auth.token.email == "cainapribeiro@gmail.com" || 
-          request.auth.token.email == "atendimento@sprecursosadm.com.br" ||
-          request.auth.token.email == "admin@spassessoria.com.br"
-        );
-    }
-
-    function isAdmin() {
-      return isEmailVerifiedAdmin() || 
-        (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() <= 128;
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    // Validates a Lead entity structure safely
-    function isValidLead(data) {
-      return data.get('name', '') is string && data.get('name', '').size() > 0 && data.get('name', '').size() <= 100
-        && data.get('phone', '') is string && data.get('phone', '').size() > 0 && data.get('phone', '').size() <= 30
-        && data.get('email', '') is string && data.get('email', '').size() <= 100
-        && data.get('service', '') is string && data.get('service', '').size() <= 100
-        && data.get('message', '') is string && data.get('message', '').size() <= 2000
-        && data.get('date', '') is string
-        && (data.get('status', 'Novo') == 'Novo' || data.get('status', 'Novo') == 'Em Atendimento' || data.get('status', 'Novo') == 'Concluído')
-        && (data.get('type', 'Contato') == 'Contato' || data.get('type', 'Contato') == 'Orçamento');
-    }
-
-    // LEADS COLLECTION RULES - open read/write for backend integration
+    // Leads collection: completely blocked from direct client SDK access.
+    // Leads are created and managed exclusively through the secure Express backend endpoints.
     match /leads/{leadId} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
 
-    // SITE CONFIGURATION COLLECTION RULES - open read/write for backend integration
+    // siteData collection: completely blocked from direct client SDK access.
+    // Content is fetched and updated exclusively via secure Express backend endpoints with whitelisting and auditing.
     match /siteData/{docId} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
 
-    // TEST COLLECTION RULES FOR CONNECTION DIAGNOSTICS
-    match /test/{docId} {
-      allow get: if isValidId(docId);
-    }
-
-    // ADMINS COLLECTION
-    match /admins/{adminId} {
-      allow read: if isAdmin();
-      allow write: if isAdmin();
+    // Audit Logs: completely blocked from direct client SDK access.
+    // Logs are written strictly by the backend server.
+    match /logs_auditoria/{logId} {
+      allow read, write: if false;
     }
   }
 }

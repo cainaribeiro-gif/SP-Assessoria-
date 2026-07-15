@@ -41,6 +41,7 @@ export function BudgetModal({ isOpen, onClose, onLeadAdded }: BudgetModalProps) 
   const [name, setName] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
   const [description, setDescription] = useState("");
+  const [website, setWebsite] = useState("");
 
   if (!isOpen) return null;
 
@@ -59,33 +60,22 @@ export function BudgetModal({ isOpen, onClose, onLeadAdded }: BudgetModalProps) 
     e.preventDefault();
     if (!name || !whatsapp) return;
     
+    if (website) {
+      console.warn("Spam check triggered");
+      setStep(4);
+      return;
+    }
+
     const selectedService = getSelectedServiceDetails();
     const leadData = {
-      id: `lead-${Date.now()}`,
       name,
       phone: whatsapp,
       service: selectedService?.label || "Orçamento",
       message: description || `Simulador de Orçamento: ${selectedService?.label}. Estimativa base: ${selectedService?.basePrice}`,
       type: "Orçamento",
-      status: "Novo",
-      date: new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })
+      lgpdConsent: true,
+      website: website
     };
-
-    // Callback to save locally
-    if (onLeadAdded) {
-      onLeadAdded(leadData);
-    } else {
-      const saved = localStorage.getItem("sp_site_data");
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          parsed.leads = [leadData, ...(parsed.leads || [])];
-          localStorage.setItem("sp_site_data", JSON.stringify(parsed));
-        } catch (err) {
-          console.warn(err);
-        }
-      }
-    }
 
     // Submit lead to our database API
     fetch("/api/leads", {
@@ -308,6 +298,19 @@ Tenho interesse em agilizar o meu protocolo administrativo. Como podemos prosseg
                   rows={3}
                   placeholder="Conte brevemente o ocorrido (ex: recebi uma multa indevida, meu BPC foi negado...)"
                   className="w-full bg-gray-50 border border-gray-250 text-gray-800 placeholder-gray-400 rounded-lg px-4 py-2 text-sm focus:outline-hidden focus:border-brand-gold-500 focus:bg-white transition-colors resize-none"
+                />
+              </div>
+
+              {/* Honeypot field - visually hidden */}
+              <div className="hidden" aria-hidden="true">
+                <label className="block text-xs text-gray-600 font-bold mb-1">Website</label>
+                <input
+                  type="text"
+                  tabIndex={-1}
+                  value={website}
+                  onChange={(e) => setWebsite(e.target.value)}
+                  placeholder="Deixe em branco se for humano"
+                  autoComplete="off"
                 />
               </div>
 

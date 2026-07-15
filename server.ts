@@ -4,25 +4,22 @@ import dotenv from "dotenv";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
-
-// Firebase Client Imports for server-side usage with API key
-import { initializeApp } from "firebase/app";
-import { 
-  getFirestore, 
-  doc, 
-  getDoc, 
-  setDoc, 
-  collection, 
-  getDocs, 
-  deleteDoc 
-} from "firebase/firestore";
+import { initializeApp, getApps, getApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import firebaseConfig from "./firebase-applet-config.json";
 
 dotenv.config();
 
-// Initialize Firebase SDK with client credentials to authenticate via API key
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp, (firebaseConfig as any).firestoreDatabaseId);
+// Initialize Firebase Admin SDK using Application Default Credentials in production/sandbox
+const firebaseApp = getApps().length === 0 
+  ? initializeApp({
+      projectId: firebaseConfig.projectId
+    })
+  : getApp();
+
+const adminAuth = getAuth(firebaseApp);
+const adminDb = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
 // Path to site data file (for initial seeding)
 const SITE_DATA_PATH = path.join(process.cwd(), "src", "site-data.json");
@@ -40,37 +37,204 @@ function readSiteDataFile(): any {
   return null;
 }
 
+// Interfaces & Middlewares for Security
+export interface AuthenticatedRequest extends express.Request {
+  user?: {
+    uid: string;
+    email?: string;
+    role: string;
+    active: boolean;
+  };
+}
+
+// Memory-based lightweight Rate Limiter
+const rateLimits = new Map<string, { count: number; resetAt: number }>();
+function rateLimiter(windowMs: number, maxRequests: number) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = req.ip || req.headers["x-forwarded-for"] as string || "unknown";
+    const now = Date.now();
+    const limit = rateLimits.get(ip);
+
+    if (!limit || now > limit.resetAt) {
+      rateLimits.set(ip, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    if (limit.count >= maxRequests) {
+      return res.status(429).json({ error: "Muitas solicitações a partir deste IP, por favor tente novamente mais tarde." });
+    }
+
+    limit.count += 1;
+    next();
+  };
+}
+
+// Firebase Auth Token Verification Middleware
+async function requireAuth(req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Token de autenticação não fornecido." });
+  }
+
+  const token = authHeader.split("Bearer ")[1];
+  try {
+    const decodedToken = await adminAuth.verifyIdToken(token);
+    const uid = decodedToken.uid;
+    const email = decodedToken.email || "";
+
+    // Fetch profile from Firestore profiles collection
+    const profileRef = adminDb.collection("profiles").doc(uid);
+    let profileSnap = await profileRef.get();
+
+    let role = "cliente";
+    let active = true;
+
+    if (!profileSnap.exists) {
+      // Auto-provision admin profile if it matches the designated admins
+      const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com"];
+      if (adminEmails.includes(email.toLowerCase())) {
+        role = "admin";
+        await profileRef.set({
+          role,
+          active: true,
+          displayName: email.toLowerCase() === "atendimento.spassessoria@gmail.com" ? "SP Assessoria Admin" : "Cainã Ribeiro",
+          email: email,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp()
+        });
+      } else {
+        // Create a default client profile
+        await profileRef.set({
+          role: "cliente",
+          active: true,
+          displayName: decodedToken.name || email.split("@")[0] || "Cliente",
+          email: email,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp()
+        });
+      }
+      profileSnap = await profileRef.get();
+    }
+
+    const profileData = profileSnap.data();
+    if (!profileData || profileData.active === false) {
+      return res.status(403).json({ error: "Acesso negado: Conta inativa ou sem permissão." });
+    }
+
+    req.user = {
+      uid,
+      email,
+      role: profileData.role || "cliente",
+      active: profileData.active
+    };
+
+    next();
+  } catch (error) {
+    console.error("Erro na validação do token:", error);
+    return res.status(401).json({ error: "Token inválido ou expirado." });
+  }
+}
+
+// Role Authorization Middleware
+function requireRole(allowedRoles: string[]) {
+  return (req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Não autenticado." });
+    }
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: "Acesso negado: Perfil sem privilégios necessários." });
+    }
+    next();
+  };
+}
+
+// Audit Logger helper
+async function createAuditLog(uid: string, email: string, action: string, resource: string, resourceId: string, details: any) {
+  try {
+    const logId = `log-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    await adminDb.collection("logs_auditoria").doc(logId).set({
+      id: logId,
+      uid,
+      email,
+      action,
+      resource,
+      resourceId,
+      details: details ? JSON.parse(JSON.stringify(details)) : null,
+      timestamp: FieldValue.serverTimestamp()
+    });
+    console.log(`[Audit Log] User=${email} Action=${action} Resource=${resource} ID=${resourceId}`);
+  } catch (err) {
+    console.error("Failed to create audit log:", err);
+  }
+}
+
+// Memory-based cache for duplicate submissions
+const recentSubmissions = new Map<string, number>();
+
 async function startServer() {
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
-  // Middleware for parsing JSON requests
-  app.use(express.json());
+  // Middleware for parsing JSON requests with size limits
+  app.use(express.json({ limit: "5mb" }));
 
-  // API endpoint for retrieving site data
+  // CORS Middleware
+  const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(",")
+    : ["http://localhost:3000", "http://localhost:5173", "https://ais-dev-2775dfuvo4eivzv6zekf4k-415350584874.us-east1.run.app", "https://ais-pre-2775dfuvo4eivzv6zekf4k-415350584874.us-east1.run.app"];
+
+  if (process.env.APP_URL) {
+    allowedOrigins.push(process.env.APP_URL);
+  }
+
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      if (allowedOrigins.includes(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+      } else {
+        if (req.path.startsWith("/api/admin/") || req.path.startsWith("/api/site-data") && req.method === "POST") {
+          return res.status(403).json({ error: "CORS: Origem não autorizada." });
+        }
+      }
+    }
+    if (req.method === "OPTIONS") {
+      return res.status(200).end();
+    }
+    next();
+  });
+
+  // ==========================================
+  // PUBLIC ENDPOINTS
+  // ==========================================
+
+  // 1. GET /api/site-data: Public access with EXPLICIT whitelisted fields (no leads, no private data)
   app.get("/api/site-data", async (req, res) => {
     try {
-      const siteDocRef = doc(db, "siteData", "main");
-      const siteDoc = await getDoc(siteDocRef);
+      const siteDocRef = adminDb.collection("siteData").doc("main");
+      const siteDoc = await siteDocRef.get();
       
-      let data: any = null;
-      if (siteDoc.exists()) {
-        data = siteDoc.data();
+      let rawData: any = null;
+      if (siteDoc.exists) {
+        rawData = siteDoc.data();
       } else {
-        // Seeding database if the main siteData document is missing
         console.log("Firestore empty. Seeding site data from local JSON file...");
         const seedData = readSiteDataFile();
         if (seedData) {
-          data = { ...seedData };
-          const initialLeads = data.leads || [];
-          delete data.leads; // leads are stored separately
+          rawData = { ...seedData };
+          const initialLeads = rawData.leads || [];
+          delete rawData.leads; // leads are stored separately
           
-          // Save main site configuration document
-          await setDoc(siteDocRef, data);
+          await siteDocRef.set(rawData);
           
           // Seed the separate leads collection
           for (const lead of initialLeads) {
-            await setDoc(doc(db, "leads", lead.id), lead);
+            if (lead.id) {
+              await adminDb.collection("leads").doc(lead.id).set(lead);
+            }
           }
         } else {
           res.status(500).json({ error: "Dados iniciais não encontrados no servidor." });
@@ -78,119 +242,203 @@ async function startServer() {
         }
       }
 
-      // Fetch all leads from Firestore separate collection to include in site-data payload
-      const leadsColRef = collection(db, "leads");
-      const leadsSnapshot = await getDocs(leadsColRef);
-      const leadsList: any[] = [];
-      leadsSnapshot.forEach((docSnap) => {
-        leadsList.push(docSnap.data());
-      });
+      // Explicitly Whitelist Only Public Fields!
+      const publicData = {
+        siteConfig: {
+          phone: rawData?.siteConfig?.phone || "5511987049051",
+          phoneAux: rawData?.siteConfig?.phoneAux || "5511993344293",
+          email: rawData?.siteConfig?.email || "atendimento.spassessoria@gmail.com",
+          cnpj: rawData?.siteConfig?.cnpj || "67.851.115/0001-60",
+          instagram: rawData?.siteConfig?.instagram || "spra.assessoria",
+          heroTitle: rawData?.siteConfig?.heroTitle || "SP Assessoria de Recursos",
+          heroTitleAccent: rawData?.siteConfig?.heroTitleAccent || "Administrativos",
+          heroSubtitle: rawData?.siteConfig?.heroSubtitle || "“Soluções administrativas com agilidade, segurança e compromisso.”",
+          heroDescription: rawData?.siteConfig?.heroDescription || "Recursos contra negativas do INSS, defesas de pontuação e suspensão de CNH, e requerimentos administrativos em órgãos públicos federais, estaduais e municipais."
+        },
+        services: rawData?.services || {},
+        faqs: rawData?.faqs || [],
+        blogPosts: rawData?.blogPosts || [],
+        reviews: rawData?.reviews || []
+      };
 
-      // Sort leads by date descending or by ID
-      leadsList.sort((a, b) => {
-        const dateA = a.date ? new Date(a.date.replace(/,/, "")).getTime() : 0;
-        const dateB = b.date ? new Date(b.date.replace(/,/, "")).getTime() : 0;
-        return dateB - dateA || b.id.localeCompare(a.id);
-      });
-
-      // Merge separate leads collection back into response body for complete backwards compatibility
-      data.leads = leadsList;
-      res.json(data);
+      res.json(publicData);
     } catch (error) {
       console.error("Erro ao carregar dados do Firestore:", error);
       res.status(500).json({ error: "Erro ao buscar dados do banco de dados na nuvem." });
     }
   });
 
-  // API endpoint for saving modified site data (Admin)
-  app.post("/api/site-data", async (req, res) => {
+  // 2. POST /api/leads: Public lead submission with validation, sanitization, rate-limiting, and honeypot
+  app.post("/api/leads", rateLimiter(60000, 5), async (req, res) => {
     try {
-      const payload = { ...req.body };
-      const leadsInPayload = payload.leads || [];
-      
-      // Leads are stored in their own collection, strip them from siteData/main document
-      delete payload.leads;
+      const { name, email, phone, service, message, type, website, lgpdConsent } = req.body;
 
-      // 1. Update siteData/main document
-      await setDoc(doc(db, "siteData", "main"), payload);
-
-      // 2. Synchronize and reconcile separate leads collection
-      // Create/Update all leads present in payload
-      for (const lead of leadsInPayload) {
-        if (lead.id) {
-          await setDoc(doc(db, "leads", lead.id), lead);
-        }
+      // 1. Honeypot check for bots
+      if (website && website.trim() !== "") {
+        console.log("[Honeypot] Bot submission blocked.");
+        return res.json({ success: true, message: "Solicitação recebida com sucesso." });
       }
 
-      // Handle deletions: Delete leads in Firestore that are absent in incoming payload
-      const leadsColRef = collection(db, "leads");
-      const leadsSnapshot = await getDocs(leadsColRef);
-      const payloadLeadIds = new Set(leadsInPayload.map((l: any) => l.id));
-      for (const docSnap of leadsSnapshot.docs) {
-        if (!payloadLeadIds.has(docSnap.id)) {
-          await deleteDoc(doc(db, "leads", docSnap.id));
-        }
+      // 2. Strict payload check (reject extra properties)
+      const allowedFields = ["name", "email", "phone", "service", "message", "type", "website", "lgpdConsent"];
+      const extraFields = Object.keys(req.body).filter(key => !allowedFields.includes(key));
+      if (extraFields.length > 0) {
+        return res.status(400).json({ error: "Payload inválido: propriedades não permitidas." });
       }
 
-      res.json({ success: true, message: "Informações salvas e sincronizadas com sucesso!" });
-    } catch (error) {
-      console.error("Erro ao salvar dados no Firestore:", error);
-      res.status(500).json({ error: "Erro ao salvar informações no banco de dados na nuvem." });
-    }
-  });
-
-  // API endpoint for submitting a lead (Contact Form or Budget Modal)
-  app.post("/api/leads", async (req, res) => {
-    try {
-      const { name, email, phone, service, message, type } = req.body;
-      if (!name || !phone) {
-        res.status(400).json({ error: "Nome e WhatsApp são obrigatórios." });
-        return;
+      // 3. Validation & Length limit
+      if (!name || typeof name !== "string" || name.trim() === "") {
+        return res.status(400).json({ error: "Nome é obrigatório." });
+      }
+      if (!phone || typeof phone !== "string" || phone.trim() === "") {
+        return res.status(400).json({ error: "WhatsApp é obrigatório." });
       }
 
+      const cleanName = name.trim().slice(0, 100);
+      const cleanPhone = phone.trim().slice(0, 30);
+      const cleanEmail = email ? String(email).trim().toLowerCase().slice(0, 100) : "";
+      const cleanService = service ? String(service).trim().slice(0, 100) : "Geral";
+      const cleanMessage = message ? String(message).trim().slice(0, 1000) : "";
+      const cleanType = type ? String(type).trim().slice(0, 50) : "Contato";
+      const cleanConsent = lgpdConsent === true;
+
+      // 4. Double-submit prevention (within 2 minutes)
+      const duplicateKey = `${cleanEmail}:${cleanPhone}`;
+      const lastSubmitted = recentSubmissions.get(duplicateKey);
+      const now = Date.now();
+      if (lastSubmitted && now - lastSubmitted < 120000) {
+        return res.status(429).json({ error: "Você já enviou uma solicitação recentemente. Por favor, aguarde." });
+      }
+      recentSubmissions.set(duplicateKey, now);
+
+      const leadId = `lead-${Date.now()}`;
       const newLead = {
-        id: `lead-${Date.now()}`,
-        name,
-        email: email || "",
-        phone,
-        service: service || "Geral",
-        message: message || "",
+        id: leadId,
+        name: cleanName,
+        email: cleanEmail,
+        phone: cleanPhone,
+        service: cleanService,
+        message: cleanMessage,
         date: new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
         status: "Novo",
-        type: type || "Contato"
+        type: cleanType,
+        lgpdConsent: cleanConsent
       };
 
-      // Direct write into separate leads collection
-      await setDoc(doc(db, "leads", newLead.id), newLead);
+      await adminDb.collection("leads").doc(leadId).set(newLead);
+      console.log(`[Lead Created] ID=${leadId} Service=${cleanService} Type=${cleanType} Consent=${cleanConsent}`);
 
-      res.json({ success: true, lead: newLead });
+      res.json({ success: true, message: "Solicitação recebida com sucesso." });
     } catch (error) {
       console.error("Erro ao criar lead no Firestore:", error);
       res.status(500).json({ error: "Erro ao registrar solicitação no banco de dados." });
     }
   });
 
-  // API endpoint for admin login authentication
-  app.post("/api/admin/login", (req, res) => {
-    const { username, password } = req.body;
-    // Predefined secure administrator credentials for live production access
-    if (
-      (username === "atendimento@sprecursosadm.com.br" && password === "@Shafiraepablo") ||
-      (username === "admin" && password === "@Shafiraepablo")
-    ) {
-      res.json({ success: true, token: "sp_admin_token_2026_secured" });
-    } else {
-      res.status(401).json({ error: "E-mail ou senha incorretos." });
+  // ==========================================
+  // ADMINISTRATIVE ENDPOINTS (PROTECTED)
+  // ==========================================
+
+  // 1. GET /api/admin/profile: Retrieve authenticated user profile
+  app.get("/api/admin/profile", requireAuth, async (req: AuthenticatedRequest, res) => {
+    res.json({
+      uid: req.user?.uid,
+      email: req.user?.email,
+      role: req.user?.role,
+      active: req.user?.active
+    });
+  });
+
+  // 2. GET /api/admin/leads: Retrieve leads strictly for administrative profiles
+  app.get("/api/admin/leads", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const leadsColRef = adminDb.collection("leads");
+      const leadsSnapshot = await leadsColRef.get();
+      const leadsList: any[] = [];
+      leadsSnapshot.forEach((docSnap) => {
+        leadsList.push(docSnap.data());
+      });
+
+      // Sort leads by date descending
+      leadsList.sort((a, b) => {
+        const dateA = a.date ? new Date(a.date.replace(/,/, "")).getTime() : 0;
+        const dateB = b.date ? new Date(b.date.replace(/,/, "")).getTime() : 0;
+        return dateB - dateA || b.id.localeCompare(a.id);
+      });
+
+      res.json(leadsList);
+    } catch (error) {
+      console.error("Erro ao buscar leads no Firestore:", error);
+      res.status(500).json({ error: "Erro ao carregar leads do banco de dados." });
     }
   });
 
-  // API endpoint for AI assistant chat
-  app.post("/api/chat", async (req, res) => {
+  // 3. POST /api/admin/site-content (and POST /api/site-data for backwards compatibility)
+  const saveSiteContentHandler = async (req: AuthenticatedRequest, res: express.Response) => {
+    try {
+      const payload = { ...req.body };
+      const leadsInPayload = payload.leads || [];
+      
+      // Strip leads from the main siteData document
+      delete payload.leads;
+
+      // Update main site content
+      await adminDb.collection("siteData").doc("main").set(payload);
+
+      // Reconcile and synchronize leads if present in payload
+      if (leadsInPayload.length > 0) {
+        for (const lead of leadsInPayload) {
+          if (lead.id) {
+            await adminDb.collection("leads").doc(lead.id).set(lead);
+          }
+        }
+
+        // Handle deletions of leads not present in payload
+        const leadsColRef = adminDb.collection("leads");
+        const leadsSnapshot = await leadsColRef.get();
+        const payloadLeadIds = new Set(leadsInPayload.map((l: any) => l.id));
+        for (const docSnap of leadsSnapshot.docs) {
+          if (!payloadLeadIds.has(docSnap.id)) {
+            await adminDb.collection("leads").doc(docSnap.id).delete();
+          }
+        }
+      }
+
+      // Record administrative action in Audit Log
+      await createAuditLog(
+        req.user?.uid || "unknown",
+        req.user?.email || "unknown",
+        "UPDATE_SITE_CONTENT",
+        "siteData",
+        "main",
+        { updatedFields: Object.keys(payload) }
+      );
+
+      res.json({ success: true, message: "Informações salvas e sincronizadas com sucesso!" });
+    } catch (error) {
+      console.error("Erro ao salvar dados no Firestore:", error);
+      res.status(500).json({ error: "Erro ao salvar informações no banco de dados." });
+    }
+  };
+
+  app.post("/api/admin/site-content", requireAuth, requireRole(["admin", "gestor"]), saveSiteContentHandler);
+  app.post("/api/site-data", requireAuth, requireRole(["admin", "gestor"]), saveSiteContentHandler);
+
+  // API endpoint for AI assistant chat (Public but disabled by default)
+  app.post("/api/chat", rateLimiter(60000, 3), async (req, res) => {
     try {
       const { messages } = req.body;
       if (!messages || !Array.isArray(messages)) {
         res.status(400).json({ error: "O campo 'messages' é obrigatório e deve ser um array." });
         return;
+      }
+
+      // Check if chat is enabled
+      const chatEnabled = process.env.PUBLIC_CHAT_ENABLED === "true";
+      if (!chatEnabled) {
+        return res.json({ 
+          text: "Olá! No momento, o nosso canal de inteligência artificial de autoatendimento está temporariamente offline. Por favor, fale diretamente conosco clicando no botão do WhatsApp na tela para um atendimento imediato." 
+        });
       }
 
       const apiKey = process.env.GEMINI_API_KEY;
