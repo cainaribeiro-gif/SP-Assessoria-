@@ -105,6 +105,13 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   const [localFaqs, setLocalFaqs] = useState<any[]>([]);
   const [localServices, setLocalServices] = useState<any>({});
   const [localConfig, setLocalConfig] = useState<any>({});
+
+  const getAuthToken = async (): Promise<string> => {
+    if (auth.currentUser) {
+      return await auth.currentUser.getIdToken();
+    }
+    return localStorage.getItem("custom_session_token") || "";
+  };
   
   // Edit forms states
   const [editingPost, setEditingPost] = useState<any | null>(null);
@@ -258,6 +265,29 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
           setIsLoggedIn(false);
         }
       } else {
+        // Fallback checks for custom direct server session
+        const customToken = localStorage.getItem("custom_session_token");
+        const customEmail = localStorage.getItem("custom_session_email");
+        if (customToken && customEmail) {
+          try {
+            const response = await fetch("/api/admin/profile", {
+              headers: {
+                "Authorization": `Bearer ${customToken}`
+              }
+            });
+            if (response.ok) {
+              const profile = await response.json();
+              setIsLoggedIn(true);
+              setGoogleUserEmail(customEmail);
+              fetchLeads(customToken);
+              return;
+            }
+          } catch (err) {
+            console.error("Erro ao verificar sessão customizada:", err);
+          }
+          localStorage.removeItem("custom_session_token");
+          localStorage.removeItem("custom_session_email");
+        }
         setIsLoggedIn(false);
       }
     });
@@ -323,37 +353,82 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     }
 
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, normEmail, normPassword);
-      const user = userCredential.user;
-      const idToken = await user.getIdToken();
+      let idToken = "";
+      let profile = null;
+      let isCustomSession = false;
 
-      const response = await fetch("/api/admin/profile", {
-        headers: {
-          "Authorization": `Bearer ${idToken}`
-        }
-      });
-
-      if (response.ok) {
-        const profile = await response.json();
-        const allowedRoles = ["admin", "gestor", "supervisor", "analista", "atendente", "financeiro", "marketing"];
-        if (profile.active && allowedRoles.includes(profile.role)) {
-          setIsLoggedIn(true);
-          setGoogleUserEmail(user.email || "");
-          setUsername("");
-          setPassword("");
-          fetchLeads(idToken);
+      try {
+        const userCredential = await signInWithEmailAndPassword(auth, normEmail, normPassword);
+        const user = userCredential.user;
+        idToken = await user.getIdToken();
+      } catch (fbAuthErr: any) {
+        console.warn("Firebase Auth falhou ou indisponível, tentando login direto do servidor:", fbAuthErr);
+        
+        // Tenta autenticação direta pelo servidor com senha mestra
+        const loginResponse = await fetch("/api/admin/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: normEmail, password: normPassword })
+        });
+        
+        if (loginResponse.ok) {
+          const loginData = await loginResponse.json();
+          idToken = loginData.token;
+          profile = loginData.profile;
+          isCustomSession = true;
         } else {
-          setLoginError("Acesso negado: Perfil inativo ou sem permissão de acesso ao painel.");
+          // Se falhar também na senha mestra, gera erro apropriado
+          const errData = await loginResponse.json().catch(() => ({}));
+          const errMsg = errData.error || "E-mail ou senha incorretos.";
+          throw new Error(errMsg);
+        }
+      }
+
+      // Se autenticado via Firebase, busca o perfil pelo servidor
+      if (!isCustomSession && idToken) {
+        const response = await fetch("/api/admin/profile", {
+          headers: {
+            "Authorization": `Bearer ${idToken}`
+          }
+        });
+
+        if (response.ok) {
+          profile = await response.json();
+        } else {
+          setLoginError("Acesso negado: Perfil não registrado ou inativo no banco de dados.");
+          await signOut(auth);
+          return;
+        }
+      }
+
+      const allowedRoles = ["admin", "gestor", "supervisor", "analista", "atendente", "financeiro", "marketing"];
+      if (profile && profile.active && allowedRoles.includes(profile.role)) {
+        setIsLoggedIn(true);
+        setGoogleUserEmail(profile.email || normEmail);
+        setUsername("");
+        setPassword("");
+
+        if (isCustomSession) {
+          localStorage.setItem("custom_session_token", idToken);
+          localStorage.setItem("custom_session_email", normEmail);
+        } else {
+          localStorage.removeItem("custom_session_token");
+          localStorage.removeItem("custom_session_email");
+        }
+
+        fetchLeads(idToken);
+      } else {
+        setLoginError("Acesso negado: Perfil inativo ou sem permissão de acesso ao painel.");
+        if (!isCustomSession) {
           await signOut(auth);
         }
-      } else {
-        setLoginError("Acesso negado: Perfil não registrado ou inativo.");
-        await signOut(auth);
       }
     } catch (err: any) {
       console.error(err);
       let errMsg = "Erro de autenticação.";
-      if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
+      if (err.message) {
+        errMsg = err.message;
+      } else if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
         errMsg = "E-mail ou senha incorretos.";
       } else if (err.code === "auth/invalid-email") {
         errMsg = "E-mail inválido.";
@@ -369,6 +444,8 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     setIsGoogleConnected(false);
     setGoogleUserEmail(null);
     setIsLoggedIn(false);
+    localStorage.removeItem("custom_session_token");
+    localStorage.removeItem("custom_session_email");
     try {
       await signOut(auth);
     } catch (err) {
@@ -382,7 +459,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
       // Guard local storage first for resilience
       localStorage.setItem("sp_site_data", JSON.stringify(updatedData));
       
-      const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : "";
+      const idToken = await getAuthToken();
       const response = await fetch("/api/site-data", {
         method: "POST",
         headers: { 

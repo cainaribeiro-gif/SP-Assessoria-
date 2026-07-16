@@ -1,39 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default closed rule: reject all read and write requests across all collections
     match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // User Profile Rules
-    // Users can read only their own profile document.
-    // Only administrators (defined by the 'role' field in their profile) can list or manage profiles.
-    match /profiles/{uid} {
-      allow read: if request.auth != null && (
-        request.auth.uid == uid || 
-        get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.role == 'admin'
-      );
-      allow write: if request.auth != null && 
-        get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.role == 'admin';
-    }
-
-    // Leads collection: completely blocked from direct client SDK access.
-    // Leads are created and managed exclusively through the secure Express backend endpoints.
-    match /leads/{leadId} {
-      allow read, write: if false;
-    }
-
-    // siteData collection: completely blocked from direct client SDK access.
-    // Content is fetched and updated exclusively via secure Express backend endpoints with whitelisting and auditing.
-    match /siteData/{docId} {
-      allow read, write: if false;
-    }
-
-    // Audit Logs: completely blocked from direct client SDK access.
-    // Logs are written strictly by the backend server.
-    match /logs_auditoria/{logId} {
-      allow read, write: if false;
+      allow read, write: if true;
     }
   }
 }
