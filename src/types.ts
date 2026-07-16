@@ -28,6 +28,9 @@ export interface Review {
   date: string;
   text: string;
   serviceType: string;
+  email?: string;
+  phone?: string;
+  approved?: boolean;
 }
 
 export interface TimelineStep {

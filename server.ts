@@ -380,6 +380,39 @@ async function startServer() {
   app.get("/api/site-data", async (req, res) => {
     try {
       let rawData: any = null;
+      let isAdmin = false;
+
+      // Optional Auth check to see if we should return all reviews to an administrator
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        const token = authHeader.split("Bearer ")[1];
+        if (token.startsWith("custom_session_")) {
+          const email = token.replace("custom_session_", "").toLowerCase();
+          const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com"];
+          if (adminEmails.includes(email)) {
+            isAdmin = true;
+          }
+        } else {
+          try {
+            const decodedToken = await adminAuth.verifyIdToken(token);
+            const email = decodedToken.email || "";
+            const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com"];
+            if (adminEmails.includes(email.toLowerCase())) {
+              isAdmin = true;
+            } else {
+              const profileSnap = await adminDb.collection("profiles").doc(decodedToken.uid).get();
+              if (profileSnap.exists) {
+                const profileData = profileSnap.data();
+                if (profileData && (profileData.role === "admin" || profileData.role === "gestor")) {
+                  isAdmin = true;
+                }
+              }
+            }
+          } catch (e) {
+            // Optional auth, ignore token validation error
+          }
+        }
+      }
 
       try {
         const siteDocRef = adminDb.collection("siteData").doc("main");
@@ -433,13 +466,91 @@ async function startServer() {
         services: rawData?.services || {},
         faqs: rawData?.faqs || [],
         blogPosts: rawData?.blogPosts || [],
-        reviews: rawData?.reviews || []
+        reviews: isAdmin 
+          ? (rawData?.reviews || []) 
+          : (rawData?.reviews || []).filter((rev: any) => rev.approved !== false)
       };
 
       res.json(publicData);
     } catch (error) {
       console.error("Erro geral no endpoint site-data:", error);
       res.status(500).json({ error: "Erro ao buscar dados do banco de dados na nuvem." });
+    }
+  });
+
+  // 1b. POST /api/reviews: Public guest review submission with email & phone validation
+  app.post("/api/reviews", rateLimiter(60000, 5), async (req, res) => {
+    try {
+      const { author, stars, serviceType, text, email, phone } = req.body;
+
+      if (!author || !stars || !serviceType || !text || !email || !phone) {
+        return res.status(400).json({ error: "Todos os campos obrigatórios (nome, estrelas, serviço, comentário, e-mail, telefone) devem ser preenchidos." });
+      }
+
+      // Email Validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email.trim())) {
+        return res.status(400).json({ error: "Por favor, insira um endereço de e-mail válido." });
+      }
+
+      // Phone length validation (at least 8 characters)
+      const sanitizedPhone = phone.replace(/\D/g, "");
+      if (sanitizedPhone.length < 8) {
+        return res.status(400).json({ error: "Por favor, insira um número de telefone/WhatsApp válido com DDD." });
+      }
+
+      // Load current siteData
+      let rawData: any = null;
+      const siteDocRef = adminDb.collection("siteData").doc("main");
+      try {
+        const siteDoc = await siteDocRef.get();
+        if (siteDoc.exists) {
+          rawData = siteDoc.data();
+        } else {
+          rawData = readSiteDataFile() || {};
+        }
+      } catch (dbErr) {
+        console.warn("Firestore collection warning during review submit, using local:", dbErr);
+        rawData = readSiteDataFile() || {};
+      }
+
+      if (!rawData) {
+        rawData = {};
+      }
+      if (!rawData.reviews) {
+        rawData.reviews = [];
+      }
+
+      // Build review item with approved: false for moderation
+      const newReview = {
+        id: `rev-${Date.now()}`,
+        author: author.trim(),
+        stars: Math.max(1, Math.min(5, Number(stars))),
+        serviceType: serviceType.trim(),
+        text: text.trim(),
+        email: email.trim().toLowerCase(),
+        phone: phone.trim(),
+        date: new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" }),
+        approved: false // Mandatory review before publication
+      };
+
+      rawData.reviews = [newReview, ...rawData.reviews];
+
+      // Save back to Firestore & local JSON
+      try {
+        await siteDocRef.set(rawData);
+      } catch (dbErr) {
+        console.error("Failed to save site data with new review to Firestore:", dbErr);
+      }
+      writeSiteDataFile(rawData);
+
+      res.json({ 
+        success: true, 
+        message: "Sua avaliação foi enviada com sucesso! Ela foi recebida por nossa equipe e será revisada antes de sua publicação pública no site." 
+      });
+    } catch (error) {
+      console.error("Erro ao salvar avaliação:", error);
+      res.status(500).json({ error: "Erro interno ao salvar sua avaliação." });
     }
   });
 
@@ -745,6 +856,20 @@ Instruções importantes:
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
+  }
+
+  // Startup Sync: push current local site-data.json content to Firestore to ensure consistency
+  try {
+    const localData = readSiteDataFile();
+    if (localData) {
+      console.log("Startup Sync: Syncing local site-data.json to Firestore...");
+      const payload = { ...localData };
+      delete payload.leads; // leads are stored separately
+      await adminDb.collection("siteData").doc("main").set(payload);
+      console.log("Startup Sync: Synchronization completed successfully!");
+    }
+  } catch (syncError) {
+    console.error("Startup Sync Warning: Failed to sync local data to Firestore on boot:", syncError);
   }
 
   app.listen(PORT, "0.0.0.0", () => {

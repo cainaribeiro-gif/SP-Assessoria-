@@ -277,7 +277,14 @@ export default function App() {
 
   const fetchSiteData = async () => {
     try {
-      const response = await fetch("/api/site-data");
+      const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : (localStorage.getItem("custom_session_token") || "");
+      const headers: Record<string, string> = {};
+      if (idToken) {
+        headers["Authorization"] = `Bearer ${idToken}`;
+      }
+      const response = await fetch("/api/site-data", {
+        headers
+      });
       if (response.ok) {
         const contentType = response.headers.get("content-type");
         if (contentType && contentType.includes("application/json")) {
@@ -317,7 +324,7 @@ export default function App() {
 
   useEffect(() => {
     fetchSiteData();
-  }, []);
+  }, [adminOpen]);
 
   // Navigation states
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -340,7 +347,11 @@ export default function App() {
   const [newStars, setNewStars] = useState(5);
   const [newService, setNewService] = useState("INSS");
   const [newText, setNewText] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newPhone, setNewPhone] = useState("");
   const [reviewSuccess, setReviewSuccess] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+  const [submittingReview, setSubmittingReview] = useState(false);
 
   // Budget Modal state
   const [budgetModalOpen, setBudgetModalOpen] = useState(false);
@@ -416,25 +427,68 @@ export default function App() {
     }
   };
 
-  const handleCreateReview = (e: React.FormEvent) => {
+  const handleCreateReview = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAuthor || !newText) return;
+    setReviewError("");
+    setReviewSuccess(false);
 
-    const added: Review = {
-      id: `rev-${Date.now()}`,
-      author: newAuthor,
-      stars: newStars,
-      date: "Hoje",
-      serviceType: newService,
-      text: newText
-    };
+    if (!newAuthor.trim() || !newText.trim() || !newEmail.trim() || !newPhone.trim()) {
+      setReviewError("Por favor, preencha todos os campos obrigatórios.");
+      return;
+    }
 
-    setReviews([added, ...reviews]);
-    setNewAuthor("");
-    setNewText("");
-    setNewStars(5);
-    setReviewSuccess(true);
-    setTimeout(() => setReviewSuccess(false), 4000);
+    // Client-side Email Validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newEmail.trim())) {
+      setReviewError("Por favor, insira um endereço de e-mail válido.");
+      return;
+    }
+
+    // Client-side Phone validation
+    const sanitizedPhone = newPhone.replace(/\D/g, "");
+    if (sanitizedPhone.length < 8) {
+      setReviewError("Por favor, insira um telefone/WhatsApp válido com DDD.");
+      return;
+    }
+
+    setSubmittingReview(true);
+
+    try {
+      const response = await fetch("/api/reviews", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          author: newAuthor.trim(),
+          stars: newStars,
+          serviceType: newService,
+          text: newText.trim(),
+          email: newEmail.trim().toLowerCase(),
+          phone: newPhone.trim()
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao enviar a avaliação.");
+      }
+
+      setNewAuthor("");
+      setNewEmail("");
+      setNewPhone("");
+      setNewText("");
+      setNewStars(5);
+      setReviewSuccess(true);
+      
+      // Re-fetch site data to sync the UI in case the admin is viewing
+      fetchSiteData();
+    } catch (err: any) {
+      setReviewError(err.message || "Ocorreu um erro ao enviar sua avaliação. Tente novamente mais tarde.");
+    } finally {
+      setSubmittingReview(false);
+    }
   };
 
   const handleContactSubmit = (e: React.FormEvent) => {
@@ -1219,7 +1273,7 @@ export default function App() {
             {/* Reviews list */}
             <div className="lg:col-span-7 space-y-6">
               <div className="grid grid-cols-1 gap-6">
-                {reviews.map((rev) => (
+                {reviews.filter((rev: any) => rev.approved !== false).map((rev) => (
                   <div 
                     key={rev.id} 
                     className="p-6 bg-white border border-gray-150 rounded-xl text-left relative shadow-xs"
@@ -1248,6 +1302,11 @@ export default function App() {
                     </p>
                   </div>
                 ))}
+                {reviews.filter((rev: any) => rev.approved !== false).length === 0 && (
+                  <div className="p-12 text-center bg-white border border-gray-150 rounded-xl text-gray-400 text-xs">
+                    <p>Nenhuma avaliação publicada ainda. Seja o primeiro a avaliar!</p>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1255,19 +1314,34 @@ export default function App() {
             <div className="lg:col-span-5 bg-white border border-gray-150 rounded-2xl p-6 sm:p-8 text-left shadow-sm">
               <h3 className="text-lg font-display font-bold text-brand-navy-900 mb-1">Deixe Sua Avaliação</h3>
               <p className="text-xs text-gray-500 mb-6">
-                Sua opinião nos ajuda a aprimorar nosso atendimento e demonstrar nossa idoneidade.
+                Sua opinião nos ajuda a aprimorar nosso atendimento. Ela passará por uma revisão antes de ser publicada.
               </p>
 
               {reviewSuccess ? (
-                <div className="p-4 bg-emerald-50 border border-emerald-150 text-emerald-700 text-xs rounded-lg text-center space-y-2">
-                  <CheckCircle2 className="w-6 h-6 mx-auto animate-pulse text-emerald-600" />
-                  <p className="font-semibold">Avaliação enviada com sucesso!</p>
-                  <p className="text-[10px] text-gray-500">Ela já foi adicionada à listagem pública acima.</p>
+                <div className="p-6 bg-emerald-50 border border-emerald-150 text-emerald-700 text-xs rounded-xl text-center space-y-3">
+                  <CheckCircle2 className="w-8 h-8 mx-auto text-emerald-600 animate-pulse" />
+                  <p className="font-bold text-sm text-emerald-900">Avaliação Enviada!</p>
+                  <p className="text-xs text-emerald-800 leading-relaxed font-medium">
+                    Obrigado! Sua avaliação foi recebida com sucesso. Para manter a segurança da nossa página, sua avaliação será revisada por nossa equipe antes de ser publicada oficialmente.
+                  </p>
+                  <button
+                    onClick={() => setReviewSuccess(false)}
+                    className="mt-2 text-[10px] font-bold text-emerald-700 hover:underline cursor-pointer"
+                  >
+                    Enviar outra avaliação
+                  </button>
                 </div>
               ) : (
                 <form onSubmit={handleCreateReview} className="space-y-4">
+                  {reviewError && (
+                    <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-xs rounded-lg flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <span>{reviewError}</span>
+                    </div>
+                  )}
+
                   <div>
-                    <label className="block text-[10px] uppercase font-bold text-gray-600 tracking-wider mb-1"> Seu Nome Completo </label>
+                    <label className="block text-[10px] uppercase font-bold text-gray-600 tracking-wider mb-1"> Seu Nome Completo <span className="text-red-500">*</span></label>
                     <input
                       type="text"
                       required
@@ -1276,6 +1350,32 @@ export default function App() {
                       placeholder="Ex: Carlos Mendes"
                       className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs text-gray-800 placeholder-gray-450 focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
                     />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] uppercase font-bold text-gray-600 tracking-wider mb-1"> Seu E-mail <span className="text-red-500">*</span></label>
+                      <input
+                        type="email"
+                        required
+                        value={newEmail}
+                        onChange={(e) => setNewEmail(e.target.value)}
+                        placeholder="Ex: carlos@gmail.com"
+                        className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs text-gray-800 placeholder-gray-450 focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] uppercase font-bold text-gray-600 tracking-wider mb-1"> Telefone / WhatsApp <span className="text-red-500">*</span></label>
+                      <input
+                        type="tel"
+                        required
+                        value={newPhone}
+                        onChange={(e) => setNewPhone(e.target.value)}
+                        placeholder="Ex: (11) 99999-9999"
+                        className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs text-gray-800 placeholder-gray-450 focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                      />
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -1307,7 +1407,7 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className="block text-[10px] uppercase font-bold text-gray-600 tracking-wider mb-1"> Seu Comentário </label>
+                    <label className="block text-[10px] uppercase font-bold text-gray-600 tracking-wider mb-1"> Seu Comentário <span className="text-red-500">*</span></label>
                     <textarea
                       required
                       value={newText}
@@ -1318,12 +1418,24 @@ export default function App() {
                     />
                   </div>
 
+                  <div className="text-[10px] text-gray-400 font-medium leading-relaxed bg-gray-50 p-3 rounded-lg border border-gray-100">
+                    ℹ️ <strong>Nota de Moderação:</strong> Para garantir a idoneidade dos depoimentos e evitar spam, coletamos seu e-mail e telefone para fins de validação interna. Suas informações de contato <strong>nunca</strong> serão exibidas no site ou compartilhadas com terceiros.
+                  </div>
+
                   <button
                     type="submit"
                     id="submit-review-btn"
-                    className="w-full py-2.5 bg-brand-navy-900 hover:bg-brand-navy-800 text-white font-bold text-xs rounded-lg transition-all cursor-pointer text-center"
+                    disabled={submittingReview}
+                    className="w-full py-2.5 bg-brand-navy-900 hover:bg-brand-navy-800 disabled:bg-gray-400 text-white font-bold text-xs rounded-lg transition-all cursor-pointer text-center flex items-center justify-center gap-1.5"
                   >
-                    Publicar Minha Avaliação
+                    {submittingReview ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Enviando avaliação...</span>
+                      </>
+                    ) : (
+                      <span>Enviar Minha Avaliação</span>
+                    )}
                   </button>
                 </form>
               )}

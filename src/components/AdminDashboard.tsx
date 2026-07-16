@@ -40,6 +40,8 @@ import {
   Phone, 
   Shield, 
   MessageSquare,
+  Star,
+  EyeOff,
   RefreshCw,
   TrendingUp,
   Mail,
@@ -69,7 +71,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
-  const [activeTab, setActiveTab] = useState<"leads" | "blog" | "services" | "faqs" | "config" | "google">("leads");
+  const [activeTab, setActiveTab] = useState<"leads" | "blog" | "services" | "faqs" | "config" | "google" | "reviews">("leads");
   
   // Google Workspace state variables
   const [isGoogleConnected, setIsGoogleConnected] = useState(isWorkspaceConnected());
@@ -105,6 +107,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   const [localFaqs, setLocalFaqs] = useState<any[]>([]);
   const [localServices, setLocalServices] = useState<any>({});
   const [localConfig, setLocalConfig] = useState<any>({});
+  const [localReviews, setLocalReviews] = useState<any[]>([]);
 
   const getAuthToken = async (): Promise<string> => {
     if (auth.currentUser) {
@@ -188,6 +191,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
       setLocalFaqs(siteData.faqs || []);
       setLocalServices(siteData.services || {});
       setLocalConfig(siteData.siteConfig || {});
+      setLocalReviews(siteData.reviews || []);
     }
   }, [siteData]);
 
@@ -785,6 +789,29 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     persistDataOnServer(updatedData);
   };
 
+  // REVIEW HANDLERS
+  const handleApproveReview = (reviewId: string) => {
+    const updatedReviews = localReviews.map(r => r.id === reviewId ? { ...r, approved: true } : r);
+    setLocalReviews(updatedReviews);
+    const updatedData = { ...siteData, reviews: updatedReviews };
+    persistDataOnServer(updatedData);
+  };
+
+  const handleDisapproveReview = (reviewId: string) => {
+    const updatedReviews = localReviews.map(r => r.id === reviewId ? { ...r, approved: false } : r);
+    setLocalReviews(updatedReviews);
+    const updatedData = { ...siteData, reviews: updatedReviews };
+    persistDataOnServer(updatedData);
+  };
+
+  const handleDeleteReview = (reviewId: string) => {
+    if (!window.confirm("Tem certeza que deseja excluir esta avaliação permanentemente?")) return;
+    const updatedReviews = localReviews.filter(r => r.id !== reviewId);
+    setLocalReviews(updatedReviews);
+    const updatedData = { ...siteData, reviews: updatedReviews };
+    persistDataOnServer(updatedData);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-navy-950/80 backdrop-blur-md p-4 overflow-y-auto">
       <div 
@@ -968,6 +995,23 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                 >
                   <HelpCircle className="w-4 h-4" />
                   <span>Gerenciar FAQs</span>
+                </button>
+
+                <button
+                  onClick={() => { setActiveTab("reviews"); }}
+                  className={`w-full px-4 py-3 text-xs font-bold rounded-lg flex items-center gap-2.5 transition-all text-left cursor-pointer ${
+                    activeTab === "reviews" 
+                      ? "bg-brand-navy-900 text-white shadow-xs" 
+                      : "text-gray-600 hover:bg-gray-100 hover:text-brand-navy-900"
+                  }`}
+                >
+                  <Award className="w-4 h-4" />
+                  <span>Gerenciar Avaliações</span>
+                  {localReviews.filter((r: any) => r.approved === false).length > 0 && (
+                    <span className="ml-auto bg-brand-gold-500 text-brand-navy-950 rounded-full text-[9px] w-4.5 h-4.5 flex items-center justify-center font-bold font-sans">
+                      {localReviews.filter((r: any) => r.approved === false).length}
+                    </span>
+                  )}
                 </button>
 
                 <button
@@ -2050,6 +2094,133 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                           </tbody>
                         </table>
                       </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 7: REVIEWS MANAGEMENT */}
+              {activeTab === "reviews" && (
+                <div className="space-y-6 text-left">
+                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                    <div>
+                      <h2 className="text-lg font-display font-extrabold text-brand-navy-900 flex items-center gap-2">
+                        <Award className="w-5 h-5 text-brand-gold-500" />
+                        <span>Gerenciamento de Avaliações</span>
+                      </h2>
+                      <p className="text-xs text-gray-500">Aprove ou rejeite depoimentos e comentários enviados pelos usuários antes de publicá-los no site pública.</p>
+                    </div>
+                  </div>
+
+                  {localReviews.length === 0 ? (
+                    <div className="p-12 text-center bg-white border border-gray-150 rounded-xl text-gray-400 space-y-2 text-xs">
+                      <Award className="w-10 h-10 text-gray-300 mx-auto" />
+                      <p>Nenhuma avaliação cadastrada no banco de dados.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {localReviews.map((rev) => {
+                        const isApproved = rev.approved !== false;
+                        return (
+                          <div 
+                            key={rev.id}
+                            className={`p-5 bg-white border rounded-xl shadow-xs flex flex-col justify-between gap-4 transition-all hover:shadow-sm ${
+                              !isApproved ? "border-l-4 border-l-amber-500 border-gray-200" : "border-gray-200"
+                            }`}
+                          >
+                            <div className="space-y-3">
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <h4 className="font-bold text-brand-navy-900 text-sm flex items-center gap-2">
+                                    {rev.author}
+                                    {!isApproved && (
+                                      <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 text-[9px] font-bold rounded uppercase tracking-wide">
+                                        Pendente
+                                      </span>
+                                    )}
+                                    {isApproved && rev.approved !== undefined && (
+                                      <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[9px] font-bold rounded uppercase tracking-wide">
+                                        Publicado
+                                      </span>
+                                    )}
+                                  </h4>
+                                  <span className="text-[10px] text-brand-gold-600 font-mono font-semibold tracking-wide block mt-0.5">
+                                    {rev.serviceType}
+                                  </span>
+                                </div>
+                                <span className="text-[10px] text-gray-400 font-mono shrink-0">
+                                  {rev.date}
+                                </span>
+                              </div>
+
+                              <div className="flex gap-0.5">
+                                {Array.from({ length: 5 }).map((_, i) => (
+                                  <Star 
+                                    key={i} 
+                                    className={`w-3.5 h-3.5 ${
+                                      i < rev.stars 
+                                        ? "fill-brand-gold-500 text-brand-gold-500" 
+                                        : "text-gray-200"
+                                    }`} 
+                                  />
+                                ))}
+                              </div>
+
+                              <div className="text-xs space-y-1 bg-gray-50 p-3 rounded-lg border border-gray-100 font-medium text-gray-600">
+                                {rev.email && (
+                                  <p className="flex items-center gap-1.5 text-[11px]">
+                                    <Mail className="w-3.5 h-3.5 text-gray-400" />
+                                    <span>E-mail: <strong>{rev.email}</strong></span>
+                                  </p>
+                                )}
+                                {rev.phone && (
+                                  <p className="flex items-center gap-1.5 text-[11px]">
+                                    <Phone className="w-3.5 h-3.5 text-gray-400" />
+                                    <span>Telefone: <strong>{rev.phone}</strong></span>
+                                  </p>
+                                )}
+                              </div>
+
+                              <p className="text-xs text-gray-600 italic leading-relaxed whitespace-pre-wrap">
+                                "{rev.text}"
+                              </p>
+                            </div>
+
+                            <div className="pt-3 border-t border-gray-100 flex items-center justify-between gap-2">
+                              <button
+                                onClick={() => handleDeleteReview(rev.id)}
+                                className="px-3 py-1.5 bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer"
+                                title="Excluir avaliação permanentemente"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Excluir</span>
+                              </button>
+
+                              <div className="flex items-center gap-2">
+                                {isApproved ? (
+                                  <button
+                                    onClick={() => handleDisapproveReview(rev.id)}
+                                    className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-700 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer"
+                                    title="Ocultar do site público"
+                                  >
+                                    <EyeOff className="w-3.5 h-3.5" />
+                                    <span>Ocultar</span>
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => handleApproveReview(rev.id)}
+                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all shadow-sm hover:shadow-md cursor-pointer"
+                                    title="Aprovar e publicar no site público"
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>Aprovar & Publicar</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

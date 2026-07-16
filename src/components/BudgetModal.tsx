@@ -40,6 +40,7 @@ export function BudgetModal({ isOpen, onClose, onLeadAdded }: BudgetModalProps) 
   const [serviceId, setServiceId] = useState("");
   const [name, setName] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
+  const [email, setEmail] = useState("");
   const [description, setDescription] = useState("");
   const [website, setWebsite] = useState("");
 
@@ -58,7 +59,7 @@ export function BudgetModal({ isOpen, onClose, onLeadAdded }: BudgetModalProps) 
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !whatsapp) return;
+    if (!name || !whatsapp || !email) return;
     
     if (website) {
       console.warn("Spam check triggered");
@@ -69,6 +70,7 @@ export function BudgetModal({ isOpen, onClose, onLeadAdded }: BudgetModalProps) 
     const selectedService = getSelectedServiceDetails();
     const leadData = {
       name,
+      email,
       phone: whatsapp,
       service: selectedService?.label || "Orçamento",
       message: description || `Simulador de Orçamento: ${selectedService?.label}. Estimativa base: ${selectedService?.basePrice}`,
@@ -121,6 +123,7 @@ Tenho interesse em agilizar o meu protocolo administrativo. Como podemos prosseg
     setServiceId("");
     setName("");
     setWhatsapp("");
+    setEmail("");
     setDescription("");
   };
 
@@ -141,6 +144,10 @@ Tenho interesse em agilizar o meu protocolo administrativo. Como podemos prosseg
             onClick={() => {
               onClose();
               setStep(1);
+              setName("");
+              setWhatsapp("");
+              setEmail("");
+              setDescription("");
             }} 
             className="text-gray-400 hover:text-brand-navy-900 transition-colors cursor-pointer rounded p-1 hover:bg-gray-200"
           >
@@ -284,6 +291,20 @@ Tenho interesse em agilizar o meu protocolo administrativo. Como podemos prosseg
                   value={whatsapp}
                   onChange={(e) => setWhatsapp(e.target.value)}
                   placeholder="Ex: (11) 99999-9999"
+                  className="w-full bg-gray-50 border border-gray-250 text-gray-800 placeholder-gray-400 rounded-lg px-4 py-2.5 text-sm focus:outline-hidden focus:border-brand-gold-500 focus:bg-white transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-gray-600 uppercase tracking-wider mb-1">
+                  Seu E-mail *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Ex: seuemail@dominio.com"
                   className="w-full bg-gray-50 border border-gray-250 text-gray-800 placeholder-gray-400 rounded-lg px-4 py-2.5 text-sm focus:outline-hidden focus:border-brand-gold-500 focus:bg-white transition-colors"
                 />
               </div>
