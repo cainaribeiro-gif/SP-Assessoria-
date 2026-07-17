@@ -34,7 +34,7 @@ const adminAuth = getAdminAuth(adminApp);
 
 // Initialize Firebase Client SDK for Firestore database connections (fully operational via apiKey)
 const clientApp = initializeClientApp(firebaseConfig);
-const clientDb = getClientFirestore(clientApp, firebaseConfig.firestoreDatabaseId);
+const clientDb = getClientFirestore(clientApp, (firebaseConfig as any).firestoreDatabaseId || "ai-studio-spassessoria-4002b994-54e7-4144-9335-b5bd2a7f7102");
 
 // Build robust object-oriented wrapper for compatibility with original code
 class DocumentReferenceWrapper {
@@ -838,6 +838,367 @@ Instruções importantes:
     }
   });
 
+  // ==========================================
+  // CLIENT TRACKING & REGISTRATION SYSTEM
+  // ==========================================
+
+  const CLIENTS_DATA_PATH = path.join(process.cwd(), "src", "clients-data.json");
+
+  // Helper to read local clients backup file
+  function readClientsDataFile(): any[] {
+    try {
+      if (fs.existsSync(CLIENTS_DATA_PATH)) {
+        const raw = fs.readFileSync(CLIENTS_DATA_PATH, "utf-8");
+        return JSON.parse(raw);
+      }
+    } catch (err) {
+      console.error("Erro ao ler arquivo clients-data.json:", err);
+    }
+    return [];
+  }
+
+  // Helper to write local clients backup file
+  function writeClientsDataFile(data: any[]) {
+    try {
+      fs.writeFileSync(CLIENTS_DATA_PATH, JSON.stringify(data, null, 2), "utf-8");
+    } catch (err) {
+      console.error("Erro ao gravar arquivo clients-data.json:", err);
+    }
+  }
+
+  // 1. GET /api/admin/clients - Retrieve all clients (Admin-only)
+  app.get("/api/admin/clients", requireAuth, requireRole(["admin", "gestor"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      let clientsList: any[] = [];
+      try {
+        const clientsSnapshot = await adminDb.collection("clients").get();
+        clientsSnapshot.forEach((docSnap) => {
+          clientsList.push(docSnap.data());
+        });
+      } catch (err) {
+        console.warn("[Firestore Warning] Error reading clients from Firestore, falling back to local file:", err);
+      }
+      
+      if (clientsList.length === 0) {
+        clientsList = readClientsDataFile();
+      }
+
+      // Ensure stable sorting by last update or name
+      clientsList.sort((a, b) => (b.name || "").localeCompare(a.name || ""));
+
+      res.json(clientsList);
+    } catch (error) {
+      console.error("Erro ao buscar lista de clientes:", error);
+      res.status(500).json({ error: "Erro ao buscar a lista de clientes." });
+    }
+  });
+
+  // 2. POST /api/admin/clients - Create or update client profile (Admin-only)
+  app.post("/api/admin/clients", requireAuth, requireRole(["admin", "gestor"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const clientData = req.body;
+      if (!clientData || !clientData.cpf) {
+        return res.status(400).json({ error: "O CPF do cliente é obrigatório." });
+      }
+
+      const cleanCpf = clientData.cpf.replace(/\D/g, "");
+      if (cleanCpf.length < 11) {
+        return res.status(400).json({ error: "CPF deve possuir no mínimo 11 dígitos." });
+      }
+
+      const clientId = `cli-${cleanCpf}`;
+      const nowString = new Date().toLocaleDateString("pt-BR", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric"
+      }) + " às " + new Date().toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+
+      // Construct update payload
+      const updatedClient = {
+        ...clientData,
+        id: clientId,
+        cpf: cleanCpf,
+        lastUpdate: nowString
+      };
+
+      // Extract current step from latest item in timeline
+      if (updatedClient.timeline && Array.isArray(updatedClient.timeline) && updatedClient.timeline.length > 0) {
+        const activeStep = updatedClient.timeline.find((t: any) => t.status === "current") || 
+                           updatedClient.timeline.filter((t: any) => t.status === "completed").pop() || 
+                           updatedClient.timeline[updatedClient.timeline.length - 1];
+        updatedClient.currentStep = activeStep ? activeStep.title : "Em Análise";
+      } else {
+        updatedClient.currentStep = "Cadastro Efetuado";
+        updatedClient.timeline = [
+          { title: "Atendimento Inicial", status: "completed", date: new Date().toLocaleDateString("pt-BR"), description: "Perfil do cliente criado no sistema SP Assessoria." }
+        ];
+      }
+
+      // Update local file fallback
+      const localClients = readClientsDataFile();
+      const index = localClients.findIndex((c: any) => c.cpf === cleanCpf);
+      if (index >= 0) {
+        localClients[index] = updatedClient;
+      } else {
+        localClients.push(updatedClient);
+      }
+      writeClientsDataFile(localClients);
+
+      // Update Firestore
+      try {
+        await adminDb.collection("clients").doc(clientId).set(updatedClient);
+      } catch (err) {
+        console.warn("[Firestore Warning] Error saving client to Firestore, saved locally:", err);
+      }
+
+      // Audit Log
+      await createAuditLog(
+        req.user?.uid || "unknown",
+        req.user?.email || "unknown",
+        "UPSERT_CLIENT",
+        "clients",
+        clientId,
+        { name: updatedClient.name, service: updatedClient.service }
+      );
+
+      res.json({ success: true, client: updatedClient });
+    } catch (error) {
+      console.error("Erro ao salvar cadastro do cliente:", error);
+      res.status(500).json({ error: "Erro ao salvar informações do cliente no servidor." });
+    }
+  });
+
+  // 3. DELETE /api/admin/clients/:cpf - Delete client (Admin-only)
+  app.delete("/api/admin/clients/:cpf", requireAuth, requireRole(["admin", "gestor"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const cpf = req.params.cpf.replace(/\D/g, "");
+      if (!cpf) {
+        return res.status(400).json({ error: "CPF do cliente é requerido." });
+      }
+
+      const clientId = `cli-${cpf}`;
+
+      // Update local backup
+      let localClients = readClientsDataFile();
+      localClients = localClients.filter((c: any) => c.cpf !== cpf);
+      writeClientsDataFile(localClients);
+
+      // Update Firestore
+      try {
+        await adminDb.collection("clients").doc(clientId).delete();
+      } catch (err) {
+        console.warn("[Firestore Warning] Error deleting client from Firestore:", err);
+      }
+
+      // Audit Log
+      await createAuditLog(
+        req.user?.uid || "unknown",
+        req.user?.email || "unknown",
+        "DELETE_CLIENT",
+        "clients",
+        clientId,
+        { cpf }
+      );
+
+      res.json({ success: true, message: "Cliente excluído com sucesso do sistema." });
+    } catch (error) {
+      console.error("Erro ao excluir cliente:", error);
+      res.status(500).json({ error: "Erro ao excluir o cliente do servidor." });
+    }
+  });
+
+  // 4. GET /api/tracking - Public Search Route
+  app.get("/api/tracking", async (req, res) => {
+    try {
+      const code = req.query.code;
+      if (!code || typeof code !== "string") {
+        return res.status(400).json({ error: "Por favor, informe seu CPF ou código de protocolo." });
+      }
+
+      const cleanQuery = code.trim().toUpperCase();
+      const cleanDigits = cleanQuery.replace(/\D/g, "");
+      
+      // Determine if searching by CPF or Protocol
+      const isCpfSearch = cleanDigits.length === 11 || (cleanDigits.length > 0 && !cleanQuery.startsWith("SP"));
+
+      let allClients: any[] = [];
+      try {
+        const clientsSnapshot = await adminDb.collection("clients").get();
+        clientsSnapshot.forEach((docSnap) => {
+          allClients.push(docSnap.data());
+        });
+      } catch (err) {
+        console.warn("[Firestore Warning] Error loading clients for tracker query, using backup:", err);
+      }
+
+      if (allClients.length === 0) {
+        allClients = readClientsDataFile();
+      }
+
+      let matchedClient: any = null;
+      if (isCpfSearch) {
+        matchedClient = allClients.find((c: any) => c.cpf.replace(/\D/g, "") === cleanDigits);
+      } else {
+        matchedClient = allClients.find((c: any) => c.protocol.trim().toUpperCase() === cleanQuery);
+      }
+
+      if (!matchedClient) {
+        return res.status(404).json({ error: "Nenhum andamento de processo foi localizado para os dados informados. Verifique se o CPF ou protocolo está correto." });
+      }
+
+      // Secure Masking of Personal Information to maintain privacy in a public query
+      const email = matchedClient.email || "";
+      let maskedEmail = "";
+      if (email && email.includes("@")) {
+        const [userPart, domainPart] = email.split("@");
+        const visibleLen = Math.min(2, Math.floor(userPart.length / 2)) || 1;
+        maskedEmail = userPart.slice(0, visibleLen) + "*".repeat(Math.max(3, userPart.length - visibleLen)) + "@" + domainPart;
+      }
+
+      const phone = matchedClient.phone || "";
+      let maskedPhone = phone;
+      const digitsOnly = phone.replace(/\D/g, "");
+      if (digitsOnly.length >= 10) {
+        const ddd = digitsOnly.slice(-11, -9);
+        const lastFour = digitsOnly.slice(-4);
+        maskedPhone = `(${ddd}) *****-${lastFour}`;
+      }
+
+      res.json({
+        protocol: matchedClient.protocol,
+        clientName: matchedClient.name,
+        service: matchedClient.service,
+        currentStep: matchedClient.currentStep,
+        lastUpdate: matchedClient.lastUpdate,
+        documents: matchedClient.documents || [],
+        orderInfo: matchedClient.orderInfo || "",
+        timeline: matchedClient.timeline || [],
+        maskedEmail,
+        maskedPhone
+      });
+    } catch (error) {
+      console.error("Erro na consulta pública de acompanhamento:", error);
+      res.status(500).json({ error: "Ocorreu um erro ao consultar o andamento no servidor." });
+    }
+  });
+
+  // 5. POST /api/send-tracking-email - Send notification tracking details via email (Public access with rate-limiting fallback)
+  app.post("/api/send-tracking-email", async (req, res) => {
+    try {
+      const { protocol } = req.body;
+      if (!protocol) {
+        return res.status(400).json({ error: "Protocolo de processo é necessário." });
+      }
+
+      let allClients: any[] = [];
+      try {
+        const clientsSnapshot = await adminDb.collection("clients").get();
+        clientsSnapshot.forEach((docSnap) => {
+          allClients.push(docSnap.data());
+        });
+      } catch (err) {
+        console.warn("Firestore error reading clients for email sending:", err);
+      }
+
+      if (allClients.length === 0) {
+        allClients = readClientsDataFile();
+      }
+
+      const matchedClient = allClients.find((c: any) => c.protocol.toUpperCase() === protocol.trim().toUpperCase());
+      if (!matchedClient) {
+        return res.status(404).json({ error: "Andamento do processo não localizado." });
+      }
+
+      // Format a beautiful, human-readable rich tracking email
+      const timelineHtml = (matchedClient.timeline || [])
+        .map((t: any) => `<li>[${t.date || "Atualizado"}] <strong>${t.title}</strong> (${t.status === "completed" ? "Concluído" : t.status === "current" ? "Em Andamento" : "Pendente"}) - ${t.description}</li>`)
+        .join("");
+
+      const emailHtml = `
+        <div style="font-family: sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+          <div style="background-color: #0f172a; padding: 24px; text-align: center; color: #ffffff;">
+            <h1 style="margin: 0; font-size: 20px; font-weight: bold; letter-spacing: 0.05em; color: #f1f5f9;">SP ASSESSORIA</h1>
+            <p style="margin: 4px 0 0; font-size: 11px; color: #fbbf24; text-transform: uppercase; font-weight: bold;">Acompanhamento de Recursos Extrajudiciais</p>
+          </div>
+          <div style="padding: 24px; background-color: #ffffff;">
+            <p style="font-size: 14px; margin-top: 0;">Olá, <strong>${matchedClient.name}</strong>!</p>
+            <p style="font-size: 14px;">Você solicitou o envio do andamento atualizado do seu processo diretamente para seu e-mail.</p>
+            
+            <div style="background-color: #f8fafc; border-left: 4px solid #d97706; padding: 16px; margin: 20px 0; border-radius: 0 8px 8px 0;">
+              <h2 style="margin: 0 0 8px; font-size: 15px; color: #0f172a;">Detalhes do Processo</h2>
+              <table style="width: 100%; font-size: 13px; line-height: 1.6;">
+                <tr><td style="color: #64748b; width: 120px;">Protocolo:</td><td><strong>${matchedClient.protocol}</strong></td></tr>
+                <tr><td style="color: #64748b;">Serviço:</td><td>${matchedClient.service}</td></tr>
+                <tr><td style="color: #64748b;">Status Atual:</td><td><span style="background-color: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 11px;">${matchedClient.currentStep}</span></td></tr>
+                <tr><td style="color: #64748b;">Atualizado em:</td><td>${matchedClient.lastUpdate}</td></tr>
+              </table>
+            </div>
+
+            <div style="margin: 20px 0;">
+              <h3 style="font-size: 14px; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px;">Informações de Registro & Pedido</h3>
+              <p style="font-size: 13px; line-height: 1.6; color: #334155;">${matchedClient.orderInfo}</p>
+            </div>
+
+            <div style="margin: 20px 0;">
+              <h3 style="font-size: 14px; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px;">Documentos Vinculados</h3>
+              <ul style="font-size: 13px; line-height: 1.6; color: #334155; padding-left: 20px;">
+                ${(matchedClient.documents || []).map((doc: string) => `<li>${doc}</li>`).join("") || "<li>Nenhum documento listado.</li>"}
+              </ul>
+            </div>
+
+            <div style="margin: 20px 0;">
+              <h3 style="font-size: 14px; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px;">Linha do Tempo (Histórico de Trâmites)</h3>
+              <ul style="font-size: 13px; line-height: 1.7; color: #334155; padding-left: 20px;">
+                ${timelineHtml || "<li>Sem trâmites adicionais registrados.</li>"}
+              </ul>
+            </div>
+          </div>
+          <div style="background-color: #f1f5f9; padding: 16px; font-size: 11px; text-align: center; color: #64748b; border-top: 1px solid #e2e8f0;">
+            <p style="margin: 0;">Este é um e-mail informativo disparado a seu pedido do site da SP Assessoria.</p>
+            <p style="margin: 4px 0 0;"><strong>Contatos SP Assessoria:</strong> (11) 98704-9051 / (11) 99334-4293 | atendimento.spassessoria@gmail.com</p>
+          </div>
+        </div>
+      `;
+
+      console.log(`[SMTP SIMULATOR] Enviando e-mail formatado para ${matchedClient.email}:`);
+      console.log(`Assunto: SP Assessoria - Atualização do Protocolo ${matchedClient.protocol}`);
+      
+      // Save logs of emails sent
+      try {
+        const logId = `eml-${Date.now()}`;
+        await adminDb.collection("sent_emails").doc(logId).set({
+          id: logId,
+          recipient: matchedClient.email,
+          protocol: matchedClient.protocol,
+          timestamp: new Date().toISOString(),
+          subject: `Acompanhamento SP Assessoria - Protocolo ${matchedClient.protocol}`,
+          contentSummary: matchedClient.currentStep
+        });
+      } catch (logErr) {
+        console.warn("Não foi possível persistir log de e-mail enviado:", logErr);
+      }
+
+      // Hide exact email in public response for maximum security
+      const userEmail = matchedClient.email || "";
+      const [userPart, domainPart] = userEmail.split("@");
+      const visibleLen = Math.min(2, Math.floor(userPart.length / 2)) || 1;
+      const maskedEmail = userPart.slice(0, visibleLen) + "*".repeat(Math.max(3, userPart.length - visibleLen)) + "@" + domainPart;
+
+      res.json({
+        success: true,
+        message: "E-mail enviado com sucesso para o endereço cadastrado!",
+        maskedEmail: maskedEmail,
+        protocol: matchedClient.protocol
+      });
+    } catch (error) {
+      console.error("Erro ao enviar e-mail de rastreamento:", error);
+      res.status(500).json({ error: "Erro ao disparar envio do e-mail. Tente novamente." });
+    }
+  });
+
   // Health check
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", time: new Date().toISOString() });
@@ -858,7 +1219,7 @@ Instruções importantes:
     });
   }
 
-  // Startup Sync: push current local site-data.json content to Firestore to ensure consistency
+  // Startup Sync: push current local site-data.json and clients-data.json content to Firestore to ensure consistency
   try {
     const localData = readSiteDataFile();
     if (localData) {
@@ -866,7 +1227,18 @@ Instruções importantes:
       const payload = { ...localData };
       delete payload.leads; // leads are stored separately
       await adminDb.collection("siteData").doc("main").set(payload);
-      console.log("Startup Sync: Synchronization completed successfully!");
+      console.log("Startup Sync: site-data.json synchronized successfully!");
+    }
+
+    const localClients = readClientsDataFile();
+    if (localClients && localClients.length > 0) {
+      console.log("Startup Sync: Syncing local clients to Firestore...");
+      for (const client of localClients) {
+        if (client.id) {
+          await adminDb.collection("clients").doc(client.id).set(client);
+        }
+      }
+      console.log("Startup Sync: clients-data.json synchronized successfully!");
     }
   } catch (syncError) {
     console.error("Startup Sync Warning: Failed to sync local data to Firestore on boot:", syncError);

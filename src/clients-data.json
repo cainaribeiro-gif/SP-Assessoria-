@@ -1,0 +1,52 @@
+[
+  {
+    "id": "cli-11122233344",
+    "cpf": "11122233344",
+    "name": "João Ricardo P. Cavalcanti",
+    "email": "joao.ricardo@gmail.com",
+    "phone": "5511987654321",
+    "service": "Recurso de Cassação de CNH",
+    "protocol": "SP-2026-402",
+    "currentStep": "Recurso Protocolado - Aguardando Julgamento",
+    "lastUpdate": "15 de Julho, 2026 às 14:30",
+    "documents": [
+      "CNH Digital (Enviado)",
+      "Contrato de Assessoria Assinado",
+      "Petição do Recurso JARI (Protocolada)"
+    ],
+    "orderInfo": "Pedido nº 402, protocolado em 29/06/2026 na JARI do DETRAN-SP. Serviço de contestação de cassação de CNH por pontuação.",
+    "timeline": [
+      { "title": "Atendimento Inicial & Contrato", "status": "completed", "date": "22/06/2026", "description": "Entrada em contato, assinatura da assessoria e envio dos documentos de CNH digitalmente." },
+      { "title": "Análise Documental concluída", "status": "completed", "date": "24/06/2026", "description": "Nossos analistas identificaram inconsistências formais no processo de cassação do DETRAN." },
+      { "title": "Elaboração do Recurso Técnico", "status": "completed", "date": "26/06/2026", "description": "Recurso administrativo estruturado com base no artigo 265 do CTB e jurisprudências do CETRAN." },
+      { "title": "Protocolado junto ao Órgão Julgador", "status": "completed", "date": "29/06/2026", "description": "Recurso devidamente protocolado de forma online no DETRAN de São Paulo." },
+      { "title": "Julgamento da JARI/CETRAN", "status": "current", "date": "15/07/2026", "description": "Processo aguardando a pauta de julgamento dos conselheiros administrativos. Estamos monitorando semanalmente." },
+      { "title": "Decisão Final & Baixa de Bloqueio", "status": "pending", "description": "Aplicação da decisão favorável e liberação definitiva do prontuário." }
+    ]
+  },
+  {
+    "id": "cli-55566677788",
+    "cpf": "55566677788",
+    "name": "Antônia Cleide de Oliveira",
+    "email": "antonia.cleide@hotmail.com",
+    "phone": "5511999998888",
+    "service": "Recurso Administrativo de BPC/LOAS",
+    "protocol": "SP-2026-892",
+    "currentStep": "Análise de Provas Sociais Adicionais",
+    "lastUpdate": "15 de Julho, 2026 às 11:15",
+    "documents": [
+      "Laudo Médico Pericial",
+      "Declaração Socioeconômica (CadÚnico)",
+      "Comprovante de Despesas com Medicamentos"
+    ],
+    "orderInfo": "Benefício Assistencial ao Idoso/Deficiente (BPC-LOAS) indeferido pelo INSS. Protocolado recurso sob registro nº 892 perante a 4ª Junta de Recursos.",
+    "timeline": [
+      { "title": "Atendimento Inicial & Cadastro", "status": "completed", "date": "28/05/2026", "description": "Entrada com análise da carta de indeferimento do INSS por renda per capita familiar." },
+      { "title": "Auditoria Socioeconômica", "status": "completed", "date": "02/06/2026", "description": "Levantamento de receitas, gastos com remédios e fraldas para desconto do cálculo de renda." },
+      { "title": "Protocolo do Recurso no INSS", "status": "completed", "date": "09/06/2026", "description": "Recurso interposto perante a Junta de Recursos da Previdência Social demonstrando extrema vulnerabilidade." },
+      { "title": "Distribuição e Relatoria do Processo", "status": "completed", "date": "18/06/2026", "description": "Processo distribuído para o conselheiro relator da 4ª Junta de Recursos." },
+      { "title": "Aguardando Parecer Técnico", "status": "current", "date": "15/07/2026", "description": "Análise do parecer técnico de assistente social do INSS sobre os laudos de saúde enviados." },
+      { "title": "Homologação do Benefício", "status": "pending", "description": "Emissão de parecer conclusivo favorável e liberação do crédito retroativo." }
+    ]
+  }
+]

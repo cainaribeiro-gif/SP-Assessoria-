@@ -34,6 +34,7 @@ import {
   Edit, 
   Plus, 
   Save, 
+  Search,
   LogOut, 
   Briefcase, 
   Award, 
@@ -108,6 +109,13 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   const [localServices, setLocalServices] = useState<any>({});
   const [localConfig, setLocalConfig] = useState<any>({});
   const [localReviews, setLocalReviews] = useState<any[]>([]);
+  const [localClients, setLocalClients] = useState<any[]>([]);
+
+  // Clients state variables
+  const [searchCpf, setSearchCpf] = useState("");
+  const [editingClient, setEditingClient] = useState<any | null>(null);
+  const [showNewClientForm, setShowNewClientForm] = useState(false);
+  const [loadingClients, setLoadingClients] = useState(false);
 
   const getAuthToken = async (): Promise<string> => {
     if (auth.currentUser) {
@@ -117,6 +125,8 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   };
   
   // Edit forms states
+  const [newDocInput, setNewDocInput] = useState("");
+  const [newTimelineItem, setNewTimelineItem] = useState({ title: "", date: "", description: "", status: "pending" as "completed" | "current" | "pending" });
   const [editingPost, setEditingPost] = useState<any | null>(null);
   const [editingFaq, setEditingFaq] = useState<any | null>(null);
   const [showNewPostForm, setShowNewPostForm] = useState(false);
@@ -195,6 +205,27 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     }
   }, [siteData]);
 
+  const fetchClients = async (token: string) => {
+    try {
+      setLoadingClients(true);
+      const response = await fetch("/api/admin/clients", {
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setLocalClients(data);
+      } else {
+        console.error("Erro ao carregar lista de clientes do servidor.");
+      }
+    } catch (err) {
+      console.error("Erro de conexão ao buscar clientes:", err);
+    } finally {
+      setLoadingClients(false);
+    }
+  };
+
   const fetchLeads = async (token: string) => {
     try {
       const response = await fetch("/api/admin/leads", {
@@ -208,8 +239,11 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
       } else {
         console.error("Erro ao carregar leads do servidor.");
       }
+      
+      // Concurrently fetch registered tracking clients
+      await fetchClients(token);
     } catch (err) {
-      console.error("Erro de conexão ao buscar leads:", err);
+      console.error("Erro de conexão ao buscar dados administrativos:", err);
     }
   };
 
@@ -812,6 +846,75 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     persistDataOnServer(updatedData);
   };
 
+  // ==========================================
+  // CLIENT TRACKING MANAGEMENT HANDLERS
+  // ==========================================
+
+  const handleSaveClient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingClient || !editingClient.name || !editingClient.cpf || !editingClient.phone || !editingClient.email) {
+      setSaveError("Nome, CPF, WhatsApp e E-mail são obrigatórios.");
+      return;
+    }
+
+    try {
+      setSaveError("");
+      const idToken = await getAuthToken();
+      const response = await fetch("/api/admin/clients", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${idToken}`
+        },
+        body: JSON.stringify(editingClient)
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao salvar cliente.");
+      }
+
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+
+      // Refresh clients list from server
+      await fetchClients(idToken);
+      setEditingClient(null);
+      setShowNewClientForm(false);
+    } catch (err: any) {
+      console.error(err);
+      setSaveError(err.message || "Erro de conexão ao salvar informações do cliente.");
+    }
+  };
+
+  const handleDeleteClient = async (cpf: string) => {
+    if (!window.confirm("Tem certeza que deseja excluir o cadastro e todo o histórico deste cliente permanentemente?")) return;
+    try {
+      setSaveError("");
+      const idToken = await getAuthToken();
+      const response = await fetch(`/api/admin/clients/${cpf}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${idToken}`
+        }
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao excluir cliente.");
+      }
+
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+
+      // Refresh list
+      await fetchClients(idToken);
+    } catch (err: any) {
+      console.error(err);
+      setSaveError(err.message || "Erro de conexão ao excluir cliente.");
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-navy-950/80 backdrop-blur-md p-4 overflow-y-auto">
       <div 
@@ -959,6 +1062,18 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                       {localLeads.filter(l => l.status === "Novo").length}
                     </span>
                   )}
+                </button>
+
+                <button
+                  onClick={() => { setActiveTab("clients"); setEditingPost(null); setEditingFaq(null); setEditingClient(null); }}
+                  className={`w-full px-4 py-3 text-xs font-bold rounded-lg flex items-center gap-2.5 transition-all text-left cursor-pointer ${
+                    activeTab === "clients" 
+                      ? "bg-brand-navy-900 text-white shadow-xs" 
+                      : "text-gray-600 hover:bg-gray-100 hover:text-brand-navy-900"
+                  }`}
+                >
+                  <Folder className="w-4 h-4 text-brand-gold-500" />
+                  <span>Clientes & Processos</span>
                 </button>
 
                 <button
@@ -1240,6 +1355,491 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                       ))}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* TAB: CLIENTES & ACOMPANHAMENTO (GESTÃO DE HISTÓRICO, DOCUMENTOS E TRÂMITES) */}
+              {activeTab === "clients" && (
+                <div className="space-y-6 text-left animate-fade-in">
+                  
+                  {!editingClient && !showNewClientForm ? (
+                    // 1. LIST & SEARCH VIEW
+                    <div className="space-y-6">
+                      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+                        <div>
+                          <h2 className="text-lg font-display font-extrabold text-brand-navy-900">Cadastro de Clientes & Acompanhamento</h2>
+                          <p className="text-xs text-gray-500">Crie e edite fichas cadastrais de clientes com histórico de trâmites, documentos anexados e informações de registro.</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setEditingClient({
+                              name: "",
+                              cpf: "",
+                              email: "",
+                              phone: "",
+                              service: "Recurso de Trânsito / CNH",
+                              protocol: `SP-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
+                              currentStep: "Análise Inicial",
+                              orderInfo: "",
+                              documents: [],
+                              timeline: [
+                                { title: "Cadastro de Requerimento", date: new Date().toLocaleDateString("pt-BR"), description: "Perfil do cliente registrado no sistema administrativo e início dos estudos técnicos.", status: "completed" },
+                                { title: "Análise Inicial do Processo", date: new Date().toLocaleDateString("pt-BR"), description: "Examinando dados iniciais para proposição de recursos contra infrações.", status: "current" }
+                              ]
+                            });
+                            setShowNewClientForm(true);
+                          }}
+                          className="px-4 py-2.5 bg-brand-navy-900 text-white font-bold text-xs rounded-lg hover:bg-brand-navy-800 transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>Cadastrar Novo Cliente</span>
+                        </button>
+                      </div>
+
+                      {/* CPF / Keyword search */}
+                      <div className="bg-white border border-gray-150 rounded-xl p-4 flex flex-col sm:flex-row gap-3 items-center">
+                        <div className="flex-1 relative w-full">
+                          <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
+                          <input
+                            type="text"
+                            placeholder="Buscar cliente por CPF ou Nome..."
+                            value={searchCpf}
+                            onChange={(e) => setSearchCpf(e.target.value)}
+                            className="w-full bg-gray-50 border border-gray-250 rounded-lg pl-10 pr-4 py-2.5 text-xs text-gray-800 placeholder-gray-400 focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                          />
+                        </div>
+                        <button
+                          onClick={() => setSearchCpf("")}
+                          className="px-4 py-2.5 bg-gray-100 border border-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-200 cursor-pointer"
+                        >
+                          Limpar Filtros
+                        </button>
+                      </div>
+
+                      {/* Client Cards List */}
+                      {loadingClients ? (
+                        <div className="py-12 text-center text-gray-400 flex flex-col items-center gap-2">
+                          <RefreshCw className="w-8 h-8 text-brand-gold-500 animate-spin" />
+                          <span className="text-xs">Carregando lista de clientes...</span>
+                        </div>
+                      ) : localClients.length === 0 ? (
+                        <div className="p-12 text-center bg-white border border-gray-150 rounded-xl text-gray-400 space-y-2 text-xs">
+                          <Users className="w-10 h-10 text-gray-300 mx-auto" />
+                          <p>Nenhum cliente cadastrado no sistema administrativo.</p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 gap-4">
+                          {localClients
+                            .filter((c: any) => {
+                              const searchLower = searchCpf.trim().toLowerCase();
+                              if (!searchLower) return true;
+                              return (
+                                c.cpf?.replace(/[^\d]/g, "").includes(searchLower.replace(/[^\d]/g, "")) ||
+                                c.name?.toLowerCase().includes(searchLower)
+                              );
+                            })
+                            .map((client: any) => (
+                              <div key={client.cpf} className="p-5 bg-white border border-gray-200 rounded-xl shadow-xs space-y-4 hover:shadow-sm transition-all text-xs">
+                                <div className="flex flex-col sm:flex-row justify-between items-start gap-4">
+                                  <div>
+                                    <h4 className="text-sm font-bold text-brand-navy-900">{client.name}</h4>
+                                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-500 font-mono">
+                                      <span>CPF: <strong>{client.cpf}</strong></span>
+                                      <span>E-mail: <strong>{client.email}</strong></span>
+                                      <span>WhatsApp: <strong>{client.phone}</strong></span>
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    <button
+                                      onClick={() => {
+                                        setEditingClient(JSON.parse(JSON.stringify(client)));
+                                        setShowNewClientForm(false);
+                                      }}
+                                      className="px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-md text-gray-700 font-bold transition-all cursor-pointer flex items-center gap-1"
+                                    >
+                                      <Edit className="w-3.5 h-3.5 text-brand-navy-800" />
+                                      <span>Editar Ficha</span>
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteClient(client.cpf)}
+                                      className="px-3 py-1.5 bg-red-50 hover:bg-red-100 border border-red-100 rounded-md text-red-700 font-bold transition-all cursor-pointer flex items-center gap-1"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      <span>Excluir</span>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-3 border-t border-gray-100 bg-[#fafafa]/50 p-3 rounded-lg">
+                                  <div>
+                                    <span className="text-[10px] text-gray-400 block font-mono">SERVIÇO & PROTOCOLO</span>
+                                    <span className="font-semibold text-gray-700">{client.service}</span>
+                                    <span className="block text-brand-gold-600 font-mono font-bold text-[10px]">{client.protocol}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-[10px] text-gray-400 block font-mono">ÚLTIMO STATUS PORTAL</span>
+                                    <span className="px-2 py-0.5 bg-brand-gold-100 border border-brand-gold-200 text-brand-gold-800 text-[10px] font-bold rounded-full uppercase inline-block mt-0.5">
+                                      {client.currentStep}
+                                    </span>
+                                    <span className="block text-[10px] text-gray-500 mt-1">Atualizado em: {client.lastUpdate || "Recente"}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-[10px] text-gray-400 block font-mono">DOCS & REGISTROS</span>
+                                    <span className="text-[11px] text-gray-600 block mt-0.5 truncate">{client.documents?.length || 0} docs cadastrados</span>
+                                    <span className="text-[10px] text-gray-400 block truncate mt-0.5">{client.orderInfo || "Nenhuma informação de pedido cadastrada."}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    // 2. FORM VIEW (CREATE / EDIT CLIENT)
+                    <form onSubmit={handleSaveClient} className="space-y-6 bg-white border border-gray-200 p-6 rounded-2xl shadow-xs">
+                      <div className="flex justify-between items-center pb-4 border-b border-gray-100">
+                        <div>
+                          <h3 className="text-lg font-display font-extrabold text-brand-navy-900">
+                            {editingClient.cpf && localClients.some(c => c.cpf === editingClient.cpf) ? "Editar Informações do Cliente" : "Cadastrar Novo Cliente"}
+                          </h3>
+                          <p className="text-xs text-gray-500">Insira todos os dados cadastrais, documentos e atualize o status do processo.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingClient(null);
+                            setShowNewClientForm(false);
+                          }}
+                          className="px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-250 text-gray-700 font-bold text-xs rounded-lg cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+
+                      {/* Form inputs grid */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
+                        
+                        {/* Seção 1: Dados Pessoais */}
+                        <div className="space-y-4">
+                          <h4 className="text-xs uppercase font-mono font-bold text-brand-gold-600 tracking-wider">1. Dados Cadastrais</h4>
+                          
+                          <div>
+                            <label className="block text-gray-500 font-semibold mb-1">Nome Completo</label>
+                            <input
+                              type="text"
+                              required
+                              value={editingClient.name}
+                              onChange={(e) => setEditingClient({ ...editingClient, name: e.target.value })}
+                              placeholder="Ex: João da Silva Santos"
+                              className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-gray-500 font-semibold mb-1">CPF (Apenas números)</label>
+                              <input
+                                type="text"
+                                required
+                                disabled={editingClient.cpf && localClients.some(c => c.cpf === editingClient.cpf)}
+                                value={editingClient.cpf}
+                                onChange={(e) => setEditingClient({ ...editingClient, cpf: e.target.value.replace(/[^\d]/g, "") })}
+                                placeholder="Ex: 12345678901"
+                                className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white disabled:bg-gray-100 disabled:text-gray-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-gray-500 font-semibold mb-1">WhatsApp / Telefone</label>
+                              <input
+                                type="text"
+                                required
+                                value={editingClient.phone}
+                                onChange={(e) => setEditingClient({ ...editingClient, phone: e.target.value })}
+                                placeholder="Ex: (11) 99999-9999"
+                                className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-gray-500 font-semibold mb-1">E-mail do Cliente</label>
+                            <input
+                              type="email"
+                              required
+                              value={editingClient.email}
+                              onChange={(e) => setEditingClient({ ...editingClient, email: e.target.value })}
+                              placeholder="Ex: joao.santos@gmail.com"
+                              className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-gray-500 font-semibold mb-1">Informações de Registro, Pedido & Dados Internos</label>
+                            <textarea
+                              rows={4}
+                              value={editingClient.orderInfo || ""}
+                              onChange={(e) => setEditingClient({ ...editingClient, orderInfo: e.target.value })}
+                              placeholder="Dados sobre as infrações, documentos coletados, número do processo administrativo no DETRAN/DER, observações gerais, prazos..."
+                              className="w-full bg-gray-50 border border-gray-250 rounded-lg p-3 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Seção 2: Processo & Trâmites */}
+                        <div className="space-y-4">
+                          <h4 className="text-xs uppercase font-mono font-bold text-brand-gold-600 tracking-wider">2. Processo & Status Revisional</h4>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-gray-500 font-semibold mb-1">Serviço Contratado</label>
+                              <input
+                                type="text"
+                                required
+                                value={editingClient.service}
+                                onChange={(e) => setEditingClient({ ...editingClient, service: e.target.value })}
+                                placeholder="Ex: Defesa Pontuação CNH"
+                                className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-gray-500 font-semibold mb-1">Código do Protocolo</label>
+                              <input
+                                type="text"
+                                required
+                                value={editingClient.protocol}
+                                onChange={(e) => setEditingClient({ ...editingClient, protocol: e.target.value })}
+                                placeholder="Ex: SP-2026-402"
+                                className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-gray-500 font-semibold mb-1">Último Status (Exibido no Portal)</label>
+                              <input
+                                type="text"
+                                required
+                                value={editingClient.currentStep}
+                                onChange={(e) => setEditingClient({ ...editingClient, currentStep: e.target.value })}
+                                placeholder="Ex: Recurso Protocolado"
+                                className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-gray-500 font-semibold mb-1">Data da Última Atualização</label>
+                              <input
+                                type="text"
+                                value={editingClient.lastUpdate || ""}
+                                onChange={(e) => setEditingClient({ ...editingClient, lastUpdate: e.target.value })}
+                                placeholder="Ex: 24/05/2026"
+                                className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Gestão de Documentos Anexados */}
+                          <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg space-y-2">
+                            <label className="block text-brand-navy-900 font-bold uppercase tracking-wider text-[10px]">Documentos Cadastrados / Entregues</label>
+                            
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                placeholder="Ex: CNH Digital.pdf"
+                                value={newDocInput}
+                                onChange={(e) => setNewDocInput(e.target.value)}
+                                className="flex-1 bg-white border border-gray-250 rounded-lg px-3 py-1.5 text-xs focus:outline-hidden"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!newDocInput.trim()) return;
+                                  const currentDocs = editingClient.documents || [];
+                                  setEditingClient({
+                                    ...editingClient,
+                                    documents: [...currentDocs, newDocInput.trim()]
+                                  });
+                                  setNewDocInput("");
+                                }}
+                                className="px-3 bg-brand-navy-900 text-white font-bold rounded-lg hover:bg-brand-navy-800 transition-colors text-xs cursor-pointer"
+                              >
+                                Adicionar
+                              </button>
+                            </div>
+
+                            {(!editingClient.documents || editingClient.documents.length === 0) ? (
+                              <p className="text-[11px] text-gray-400 italic">Nenhum documento listado para este cliente.</p>
+                            ) : (
+                              <div className="flex flex-wrap gap-1.5 pt-1">
+                                {editingClient.documents.map((doc: string, idx: number) => (
+                                  <span key={idx} className="flex items-center gap-1.5 px-2 py-1 bg-white border border-gray-200 text-gray-700 rounded-md font-mono text-[10px]">
+                                    <FileText className="w-3 h-3 text-brand-gold-500" />
+                                    <span>{doc}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const filtered = editingClient.documents.filter((_: any, i: number) => i !== idx);
+                                        setEditingClient({ ...editingClient, documents: filtered });
+                                      }}
+                                      className="text-red-500 hover:text-red-700 font-bold ml-1 text-xs"
+                                    >
+                                      ×
+                                    </button>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Seção 3: Linha do Tempo / Trâmites do Processo */}
+                      <div className="pt-4 border-t border-gray-100 text-xs text-left">
+                        <h4 className="text-xs uppercase font-mono font-bold text-brand-gold-600 tracking-wider mb-3">3. Histórico de Trâmites (Exibido Cronologicamente no Portal)</h4>
+
+                        {/* Adicionar novo trâmite */}
+                        <div className="p-4 bg-gray-50 border border-gray-200 rounded-xl space-y-3 mb-4">
+                          <span className="text-[10px] uppercase font-bold text-brand-navy-900 block">Adicionar Novo Status ao Histórico</span>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-[10px] text-gray-500 mb-1 font-semibold">Título do Status</label>
+                              <input
+                                type="text"
+                                placeholder="Ex: Defesa Prévia Elaborada"
+                                value={newTimelineItem.title}
+                                onChange={(e) => setNewTimelineItem({ ...newTimelineItem, title: e.target.value })}
+                                className="w-full bg-white border border-gray-250 rounded-lg px-2.5 py-1.5 text-xs focus:outline-hidden"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-gray-500 mb-1 font-semibold">Data</label>
+                              <input
+                                type="text"
+                                placeholder="Ex: 24/05/2026"
+                                value={newTimelineItem.date}
+                                onChange={(e) => setNewTimelineItem({ ...newTimelineItem, date: e.target.value })}
+                                className="w-full bg-white border border-gray-250 rounded-lg px-2.5 py-1.5 text-xs focus:outline-hidden"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-gray-500 mb-1 font-semibold">Indicador Visual</label>
+                              <select
+                                value={newTimelineItem.status}
+                                onChange={(e) => setNewTimelineItem({ ...newTimelineItem, status: e.target.value as any })}
+                                className="w-full bg-white border border-gray-250 rounded-lg px-2.5 py-1.5 text-xs focus:outline-hidden"
+                              >
+                                <option value="completed">Concluído (Bolinha Dourada)</option>
+                                <option value="current">Ativo / Atual (Dourado Pulsante)</option>
+                                <option value="pending">Pendente (Bolinha Cinza)</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-gray-500 mb-1 font-semibold">Descrição / Detalhe do Trâmite</label>
+                            <input
+                              type="text"
+                              placeholder="Ex: Elaboramos e protocolamos o recurso de defesa prévia junto ao JARI municipal."
+                              value={newTimelineItem.description}
+                              onChange={(e) => setNewTimelineItem({ ...newTimelineItem, description: e.target.value })}
+                              className="w-full bg-white border border-gray-250 rounded-lg px-2.5 py-1.5 text-xs focus:outline-hidden"
+                            />
+                          </div>
+                          <div className="text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!newTimelineItem.title || !newTimelineItem.description) {
+                                  alert("Preencha o título e descrição do trâmite.");
+                                  return;
+                                }
+                                const cleanDate = newTimelineItem.date || new Date().toLocaleDateString("pt-BR");
+                                const currentTimeline = editingClient.timeline || [];
+                                
+                                // Se o novo item for "current" (atual), podemos transformar os trâmites atuais anteriores em "completed"
+                                let adjustedTimeline = [...currentTimeline];
+                                if (newTimelineItem.status === "current") {
+                                  adjustedTimeline = adjustedTimeline.map(item => 
+                                    item.status === "current" ? { ...item, status: "completed" } : item
+                                  );
+                                }
+
+                                setEditingClient({
+                                  ...editingClient,
+                                  timeline: [...adjustedTimeline, { ...newTimelineItem, date: cleanDate }],
+                                  // Update the top status dynamically!
+                                  currentStep: newTimelineItem.title,
+                                  lastUpdate: cleanDate
+                                });
+
+                                // Reset form
+                                setNewTimelineItem({ title: "", date: "", description: "", status: "pending" });
+                              }}
+                              className="px-4 py-2 bg-brand-gold-500 text-brand-navy-900 font-bold rounded-lg hover:bg-brand-gold-600 transition-colors text-xs cursor-pointer"
+                            >
+                              Inserir no Histórico
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Lista dos trâmites existentes */}
+                        <div className="space-y-2 mt-4">
+                          <span className="text-[10px] uppercase font-bold text-gray-400 block">Etapas Registradas (Do mais antigo para o mais novo)</span>
+                          {(!editingClient.timeline || editingClient.timeline.length === 0) ? (
+                            <p className="text-gray-400 italic">Nenhum trâmite cadastrado ainda.</p>
+                          ) : (
+                            <div className="border border-gray-150 rounded-xl overflow-hidden divide-y divide-gray-100">
+                              {editingClient.timeline.map((item: any, idx: number) => (
+                                <div key={idx} className="p-3 bg-[#fdfdfd] flex justify-between items-center gap-4 text-xs">
+                                  <div className="space-y-0.5">
+                                    <div className="flex items-center gap-2">
+                                      <span className={`w-2.5 h-2.5 rounded-full ${
+                                        item.status === "completed" ? "bg-brand-gold-500" : item.status === "current" ? "bg-brand-gold-500 animate-pulse" : "bg-gray-300"
+                                      }`} />
+                                      <strong className="text-gray-800">{item.title}</strong>
+                                      {item.date && <span className="text-[10px] text-gray-500 font-mono">({item.date})</span>}
+                                    </div>
+                                    <p className="text-[11px] text-gray-500 pl-4">{item.description}</p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const filtered = editingClient.timeline.filter((_: any, i: number) => i !== idx);
+                                      setEditingClient({ ...editingClient, timeline: filtered });
+                                    }}
+                                    className="p-1 text-red-500 hover:bg-red-50 rounded-md transition-colors font-bold text-xs"
+                                  >
+                                    Excluir Etapa
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Form Actions */}
+                      <div className="pt-6 border-t border-gray-100 flex justify-end gap-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingClient(null);
+                            setShowNewClientForm(false);
+                          }}
+                          className="px-4 py-2.5 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-5 py-2.5 bg-brand-navy-900 text-white font-bold rounded-lg hover:bg-brand-navy-800 transition-all cursor-pointer shadow-xs flex items-center gap-1.5"
+                        >
+                          <Save className="w-4 h-4" />
+                          <span>Salvar Dados do Cliente</span>
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
                 </div>
               )}
 

@@ -78,6 +78,70 @@
         }
       },
       "required": ["siteConfig", "services", "faqs", "blogPosts", "reviews"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "Client profile, registered by administrator for tracking",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique client ID"
+        },
+        "cpf": {
+          "type": "string",
+          "maxLength": 14,
+          "description": "Unique client CPF"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Full name of the client"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Email address of the client"
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "WhatsApp or phone of the client"
+        },
+        "service": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Type of service (e.g. CNH, BPC)"
+        },
+        "protocol": {
+          "type": "string",
+          "maxLength": 50,
+          "description": "Protocol code (e.g. SP-2026-402)"
+        },
+        "currentStep": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Current status phrase"
+        },
+        "lastUpdate": {
+          "type": "string",
+          "description": "Timestamp of the last update"
+        },
+        "documents": {
+          "type": "array",
+          "description": "List of attached documents metadata"
+        },
+        "orderInfo": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Details about order and registration"
+        },
+        "timeline": {
+          "type": "array",
+          "description": "Chronological history of status updates"
+        }
+      },
+      "required": ["cpf", "name", "email", "phone"]
     }
   },
   "firestore": {
@@ -88,6 +152,10 @@
     "/siteData/{docId}": {
       "schema": "SiteData",
       "description": "Document holding all dynamic site configuration"
+    },
+    "/clients/{clientId}": {
+      "schema": "Client",
+      "description": "Collection of registered client tracking profiles"
     }
   }
 }

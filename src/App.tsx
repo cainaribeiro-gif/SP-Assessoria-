@@ -335,8 +335,13 @@ export default function App() {
 
   // Portal do cliente states
   const [trackingProtocol, setTrackingProtocol] = useState("");
-  const [trackingResult, setTrackingResult] = useState<ProcessStatus | null>(null);
+  const [trackingResult, setTrackingResult] = useState<any | null>(null);
   const [trackingError, setTrackingError] = useState("");
+  const [searchingTracking, setSearchingTracking] = useState(false);
+  const [sendingTrackingEmail, setSendingTrackingEmail] = useState(false);
+  const [emailSentSuccess, setEmailSentSuccess] = useState(false);
+  const [emailConfirmOpen, setEmailConfirmOpen] = useState(false);
+  const [trackingEmailError, setTrackingEmailError] = useState("");
 
   // Blog modal states
   const [selectedPost, setSelectedPost] = useState<BlogPost | null>(null);
@@ -394,36 +399,67 @@ export default function App() {
     }
   }, [siteData]);
 
-  // Simulated live tracking generation for testing arbitrary numbers
-  const handleTrackingSearch = (e: React.FormEvent) => {
+  // Real-time tracking query from dynamic database API
+  const handleTrackingSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     setTrackingError("");
     setTrackingResult(null);
+    setSearchingTracking(true);
+    setEmailConfirmOpen(false);
+    setEmailSentSuccess(false);
+    setTrackingEmailError("");
 
-    const code = trackingProtocol.trim().toUpperCase();
-    if (!code) return;
+    const code = trackingProtocol.trim();
+    if (!code) {
+      setSearchingTracking(false);
+      return;
+    }
 
-    if (MOCK_PROTOCOLS[code]) {
-      setTrackingResult(MOCK_PROTOCOLS[code]);
-    } else if (code.match(/^\d{3}\.\d{3}\.\d{3}-\d{2}$/) || code.match(/^\d{11}$/)) {
-      // If client enters a CPF, simulate a beautiful dynamically generated progress tracker
-      const cpfFormatted = code.replace(/\D/g, "").replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
-      const simulatedResult: ProcessStatus = {
-        protocol: `SP-2026-${Math.floor(100 + Math.random() * 900)}`,
-        clientName: `Titular do CPF ${cpfFormatted}`,
-        service: "Consulta de Prontuário Consolidada",
-        currentStep: "Análise Inicial - Documentação em Triagem",
-        lastUpdate: "Hoje, às " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
-        timeline: [
-          { title: "Análise Documental Inicial", status: "completed", date: "Hoje", description: "Verificação automática de CPF e prontuário no sistema integrado SP Assessoria." },
-          { title: "Triagem de Viabilidade", status: "current", description: "Nossos consultores jurídicos estão analisando se há impedimentos ou se cabe recurso administrativo." },
-          { title: "Elaboração do Orçamento Técnico", status: "pending", description: "Cálculo de custas e envio da proposta comercial personalizada via WhatsApp." },
-          { title: "Abertura de Protocolo Oficial", status: "pending", description: "Reunião de assinaturas digitais e peticionamento nos órgãos públicos competentes." }
-        ]
-      };
-      setTrackingResult(simulatedResult);
-    } else {
-      setTrackingError("Protocolo não localizado. Experimente usar os códigos de teste informados abaixo (ex: SP-2026-402) ou digite seu CPF.");
+    try {
+      const response = await fetch(`/api/tracking?code=${encodeURIComponent(code)}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Ocorreu um erro ao consultar o processo.");
+      }
+
+      setTrackingResult(data);
+    } catch (err: any) {
+      setTrackingError(err.message || "Não foi possível localizar o andamento para o documento ou código informado.");
+    } finally {
+      setSearchingTracking(false);
+    }
+  };
+
+  // Triggers server-side email dispatch with confirmation state
+  const handleSendTrackingEmail = async () => {
+    if (!trackingResult || !trackingResult.protocol) return;
+    setSendingTrackingEmail(true);
+    setTrackingEmailError("");
+
+    try {
+      const response = await fetch("/api/send-tracking-email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ protocol: trackingResult.protocol })
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao solicitar o envio do e-mail.");
+      }
+
+      setEmailSentSuccess(true);
+      setTimeout(() => {
+        setEmailConfirmOpen(false);
+        setEmailSentSuccess(false);
+      }, 5000);
+    } catch (err: any) {
+      setTrackingEmailError(err.message || "Não foi possível estabelecer conexão para enviar o e-mail.");
+    } finally {
+      setSendingTrackingEmail(false);
     }
   };
 
@@ -1088,28 +1124,27 @@ export default function App() {
               <span className="text-xs font-mono uppercase tracking-widest text-brand-gold-600 font-bold block">Inovação & Rastreabilidade</span>
               <h2 className="text-3xl sm:text-4xl font-display font-extrabold text-brand-navy-900">Consulte seu Processo em Tempo Real</h2>
               <p className="text-sm md:text-base text-gray-600 leading-relaxed">
-                Nossos clientes não ficam no escuro. Criamos uma área demonstrativa de acompanhamento para que você monitore cada etapa do seu requerimento.
+                Nossos clientes não ficam no escuro. Criamos esta área dedicada para que você monitore com total transparência e segurança cada etapa do seu requerimento administrativo direto de nosso portal de acompanhamento.
               </p>
-              
-              <div className="p-4 bg-white border border-gray-200 rounded-xl space-y-3 shadow-xs">
-                <span className="text-xs text-gray-500 block uppercase tracking-wider font-semibold">Tente estes códigos de teste:</span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                  <button 
-                    onClick={() => setTrackingProtocol("SP-2026-402")}
-                    className="p-2 bg-gray-50 border border-gray-150 hover:border-brand-gold-500/50 text-left text-gray-700 hover:text-brand-navy-900 rounded-lg transition-colors cursor-pointer"
-                  >
-                    <strong className="text-brand-gold-600">SP-2026-402</strong> (CNH)
-                  </button>
-                  <button 
-                    onClick={() => setTrackingProtocol("SP-2026-892")}
-                    className="p-2 bg-gray-50 border border-gray-150 hover:border-brand-gold-500/50 text-left text-gray-700 hover:text-brand-navy-900 rounded-lg transition-colors cursor-pointer"
-                  >
-                    <strong className="text-brand-gold-600">SP-2026-892</strong> (BPC/LOAS)
-                  </button>
+              <div className="p-5 bg-white border border-gray-200 rounded-2xl shadow-xs space-y-4">
+                <div className="flex gap-3 items-start">
+                  <span className="p-2 bg-brand-gold-100 text-brand-gold-800 rounded-lg text-xs font-bold">1</span>
+                  <p className="text-xs text-gray-600 leading-relaxed">
+                    Insira o seu <strong>CPF</strong> ou código de <strong>Protocolo</strong> no formulário ao lado.
+                  </p>
                 </div>
-                <p className="text-[10px] text-gray-500">
-                  Ou digite seu **CPF** (Ex: 12345678900) para simular uma triagem em tempo real!
-                </p>
+                <div className="flex gap-3 items-start">
+                  <span className="p-2 bg-brand-gold-100 text-brand-gold-800 rounded-lg text-xs font-bold">2</span>
+                  <p className="text-xs text-gray-600 leading-relaxed">
+                    Acompanhe instantaneamente os trâmites, os documentos vinculados e o status revisional atualizado.
+                  </p>
+                </div>
+                <div className="flex gap-3 items-start">
+                  <span className="p-2 bg-brand-gold-100 text-brand-gold-800 rounded-lg text-xs font-bold">3</span>
+                  <p className="text-xs text-gray-600 leading-relaxed">
+                    Caso prefira, envie o relatório atualizado diretamente para o seu e-mail cadastrado com apenas um clique de forma segura.
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -1125,21 +1160,30 @@ export default function App() {
                   type="text"
                   value={trackingProtocol}
                   onChange={(e) => setTrackingProtocol(e.target.value)}
-                  placeholder="Ex: SP-2026-402 ou seu CPF"
-                  className="flex-1 bg-gray-50 border border-gray-250 rounded-lg px-4 py-3 text-sm text-gray-800 placeholder-gray-450 focus:outline-hidden focus:border-brand-gold-500 focus:bg-white transition-all"
+                  placeholder="Informe seu CPF ou código do Protocolo..."
+                  className="flex-1 bg-gray-50 border border-gray-250 rounded-lg px-4 py-3 text-sm text-gray-800 placeholder-gray-400 focus:outline-hidden focus:border-brand-gold-500 focus:bg-white transition-all"
+                  disabled={searchingTracking}
                 />
                 <button
                   type="submit"
                   id="search-protocol-btn"
-                  className="px-6 py-3 bg-brand-navy-900 text-white font-bold text-sm rounded-lg hover:bg-brand-navy-800 transition-all cursor-pointer shadow-xs"
+                  disabled={searchingTracking}
+                  className="px-6 py-3 bg-brand-navy-900 text-white font-bold text-sm rounded-lg hover:bg-brand-navy-800 transition-all cursor-pointer shadow-xs disabled:opacity-75 flex items-center justify-center gap-2"
                 >
-                  Consultar Andamento
+                  {searchingTracking ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      <span>Buscando...</span>
+                    </>
+                  ) : (
+                    <span>Consultar Andamento</span>
+                  )}
                 </button>
               </form>
 
               {/* Errors container */}
               {trackingError && (
-                <div className="p-4 bg-red-50 border border-red-150 text-red-600 text-xs rounded-lg text-left">
+                <div className="p-4 bg-red-50 border border-red-150 text-red-600 text-xs rounded-lg text-left mb-4">
                   {trackingError}
                 </div>
               )}
@@ -1173,7 +1217,7 @@ export default function App() {
 
                   {/* Timeline representation */}
                   <div className="space-y-4 relative pl-4 border-l border-gray-200 ml-2 pt-2">
-                    {trackingResult.timeline.map((item, index) => (
+                    {trackingResult.timeline.map((item: any, index: number) => (
                       <div key={index} className="relative">
                         {/* Bullet point circle indicator */}
                         <div className={`absolute -left-[21px] top-1.5 w-3.5 h-3.5 rounded-full border-2 ${
@@ -1206,6 +1250,98 @@ export default function App() {
                         </div>
                       </div>
                     ))}
+                  </div>
+
+                  {/* Documents & Files Attached */}
+                  {trackingResult.documents && trackingResult.documents.length > 0 && (
+                    <div className="p-4 bg-gray-50 border border-gray-150 rounded-xl text-xs space-y-2 mt-4">
+                      <strong className="text-brand-navy-900 block font-display">Documentos Cadastrados:</strong>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {trackingResult.documents.map((doc: string, idx: number) => (
+                          <div key={idx} className="flex items-center gap-2 p-2 bg-white rounded-lg border border-gray-200 text-gray-600">
+                            <FileText className="w-4 h-4 text-brand-gold-500 flex-shrink-0" />
+                            <span className="truncate">{doc}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Order / Registration details */}
+                  {trackingResult.orderInfo && (
+                    <div className="p-4 bg-gray-50 border border-gray-150 rounded-xl text-xs mt-2">
+                      <strong className="text-brand-navy-900 block font-display mb-1">Informações de Registro & Pedido:</strong>
+                      <p className="text-gray-600 leading-relaxed">{trackingResult.orderInfo}</p>
+                    </div>
+                  )}
+
+                  {/* Send to E-mail control panel */}
+                  <div className="mt-6 pt-4 border-t border-gray-150 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div className="text-xs text-left text-gray-500 max-w-sm">
+                      Deseja receber este relatório completo de acompanhamento e documentos em seu e-mail cadastrado?
+                    </div>
+                    
+                    {!emailConfirmOpen ? (
+                      <button
+                        type="button"
+                        onClick={() => setEmailConfirmOpen(true)}
+                        className="px-4 py-2.5 bg-brand-gold-500 hover:bg-brand-gold-600 text-brand-navy-900 font-bold text-xs rounded-lg transition-all cursor-pointer shadow-xs flex items-center gap-1.5"
+                      >
+                        <Mail className="w-4 h-4" />
+                        <span>Enviar ao meu E-mail</span>
+                      </button>
+                    ) : (
+                      <div className="w-full bg-gray-50 border border-gray-200 p-4 rounded-xl space-y-3">
+                        <div className="text-xs text-left text-gray-700">
+                          Confirma o envio deste relatório para o endereço de e-mail de cadastro parcial abaixo?
+                          <div className="mt-1.5 p-2 bg-white rounded border border-gray-200 font-mono text-brand-navy-900 font-semibold flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                            {trackingResult.maskedEmail || "seu******@email.com"}
+                          </div>
+                        </div>
+
+                        {trackingEmailError && (
+                          <div className="text-[11px] text-red-600 text-left font-semibold">
+                            {trackingEmailError}
+                          </div>
+                        )}
+
+                        {emailSentSuccess ? (
+                          <div className="p-2.5 bg-emerald-50 border border-emerald-150 text-emerald-800 text-[11px] rounded-lg text-left flex items-center gap-1.5 font-medium">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
+                            <span>E-mail enviado com sucesso! Verifique sua caixa de entrada em alguns instantes.</span>
+                          </div>
+                        ) : (
+                          <div className="flex gap-2 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEmailConfirmOpen(false);
+                                setTrackingEmailError("");
+                              }}
+                              className="px-3 py-1.5 bg-white border border-gray-300 text-gray-700 font-semibold text-xs rounded-md hover:bg-gray-50 cursor-pointer"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              disabled={sendingTrackingEmail}
+                              onClick={handleSendTrackingEmail}
+                              className="px-4 py-1.5 bg-brand-navy-900 hover:bg-brand-navy-800 text-white font-bold text-xs rounded-md cursor-pointer flex items-center gap-1.5 disabled:opacity-75"
+                            >
+                              {sendingTrackingEmail ? (
+                                <>
+                                  <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                                  <span>Disparando...</span>
+                                </>
+                              ) : (
+                                <span>Confirmar Envio</span>
+                              )}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
