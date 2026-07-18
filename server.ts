@@ -94,6 +94,56 @@ class FirestoreWrapper {
 
 const adminDb = new FirestoreWrapper(clientDb);
 
+// Ensure administrative accounts exist in Firebase Authentication on startup
+async function ensureAdminUsersExist() {
+  const adminEmails = [
+    "atendimento.spassessoria@gmail.com",
+    "cainapribeiro@gmail.com",
+    "atendimento@sprecursosadm.com.br"
+  ];
+  const MASTER_PASSWORD = process.env.ADMIN_MASTER_PASSWORD || "spassessoria123";
+
+  for (const email of adminEmails) {
+    try {
+      await adminAuth.getUserByEmail(email);
+      console.log(`[Firebase Auth] User already exists: ${email}`);
+    } catch (err: any) {
+      if (err.code === "auth/user-not-found" || err.code === "auth/invalid-credential") {
+        try {
+          const userRecord = await adminAuth.createUser({
+            email: email,
+            password: MASTER_PASSWORD,
+            emailVerified: true,
+            displayName: email === "cainapribeiro@gmail.com" ? "Cainã Ribeiro" : "SP Assessoria Admin"
+          });
+          console.log(`[Firebase Auth] Successfully created admin user: ${email} with UID ${userRecord.uid}`);
+          
+          // Pre-populate user profile in Firestore profiles collection
+          try {
+            await adminDb.collection("profiles").doc(userRecord.uid).set({
+              role: "admin",
+              active: true,
+              displayName: email === "cainapribeiro@gmail.com" ? "Cainã Ribeiro" : "SP Assessoria Admin",
+              email: email,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+            console.log(`[Firestore] Pre-populated admin profile for: ${email}`);
+          } catch (profileErr) {
+            console.warn("[Firestore] Pre-populate profile failed:", profileErr);
+          }
+        } catch (createErr) {
+          console.error(`[Firebase Auth] Failed to create admin user ${email}:`, createErr);
+        }
+      } else {
+        console.error(`[Firebase Auth] Error checking user ${email}:`, err);
+      }
+    }
+  }
+}
+
+ensureAdminUsersExist().catch(console.error);
+
 const FieldValue = {
   serverTimestamp: () => serverTimestamp()
 };
@@ -213,7 +263,7 @@ async function requireAuth(req: AuthenticatedRequest, res: express.Response, nex
   // Direct bypass for custom admin login sessions
   if (token.startsWith("custom_session_")) {
     const email = token.replace("custom_session_", "").toLowerCase();
-    const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com"];
+    const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com", "atendimento@sprecursosadm.com.br"];
     if (adminEmails.includes(email)) {
       req.user = {
         uid: "custom_uid_" + email.split("@")[0],
@@ -243,13 +293,13 @@ async function requireAuth(req: AuthenticatedRequest, res: express.Response, nex
 
       if (!profileSnap.exists) {
         // Auto-provision admin profile if it matches the designated admins
-        const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com"];
+        const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com", "atendimento@sprecursosadm.com.br"];
         if (adminEmails.includes(email.toLowerCase())) {
           role = "admin";
           await profileRef.set({
             role,
             active: true,
-            displayName: email.toLowerCase() === "atendimento.spassessoria@gmail.com" ? "SP Assessoria Admin" : "Cainã Ribeiro",
+            displayName: email.toLowerCase() === "cainapribeiro@gmail.com" ? "Cainã Ribeiro" : "SP Assessoria Admin",
             email: email,
             createdAt: FieldValue.serverTimestamp(),
             updatedAt: FieldValue.serverTimestamp()
@@ -277,7 +327,7 @@ async function requireAuth(req: AuthenticatedRequest, res: express.Response, nex
       active = profileData.active !== false;
     } catch (firestoreError) {
       console.warn("[Firestore Warning] Error loading profile from Firestore. Using secure offline fallback:", firestoreError);
-      const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com"];
+      const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com", "atendimento@sprecursosadm.com.br"];
       if (adminEmails.includes(email.toLowerCase())) {
         role = "admin";
       } else {
@@ -388,7 +438,7 @@ async function startServer() {
         const token = authHeader.split("Bearer ")[1];
         if (token.startsWith("custom_session_")) {
           const email = token.replace("custom_session_", "").toLowerCase();
-          const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com"];
+          const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com", "atendimento@sprecursosadm.com.br"];
           if (adminEmails.includes(email)) {
             isAdmin = true;
           }
@@ -396,7 +446,7 @@ async function startServer() {
           try {
             const decodedToken = await adminAuth.verifyIdToken(token);
             const email = decodedToken.email || "";
-            const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com"];
+            const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com", "atendimento@sprecursosadm.com.br"];
             if (adminEmails.includes(email.toLowerCase())) {
               isAdmin = true;
             } else {
@@ -637,7 +687,7 @@ async function startServer() {
     const { email, password } = req.body;
     const normEmail = email?.trim().toLowerCase();
     const normPassword = password?.trim();
-    const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com"];
+    const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com", "atendimento@sprecursosadm.com.br"];
 
     if (!normEmail || !normPassword) {
       return res.status(400).json({ error: "E-mail e senha são obrigatórios." });
@@ -652,7 +702,7 @@ async function startServer() {
           email: normEmail,
           role: "admin",
           active: true,
-          displayName: normEmail === "atendimento.spassessoria@gmail.com" ? "SP Assessoria Admin" : "Cainã Ribeiro"
+          displayName: normEmail === "cainapribeiro@gmail.com" ? "Cainã Ribeiro" : "SP Assessoria Admin"
         }
       });
     }
