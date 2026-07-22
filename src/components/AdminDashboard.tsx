@@ -69,10 +69,11 @@ interface AdminDashboardProps {
 
 export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: AdminDashboardProps) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [userRole, setUserRole] = useState<string>("admin");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
-  const [activeTab, setActiveTab] = useState<"leads" | "blog" | "services" | "faqs" | "config" | "google" | "reviews">("leads");
+  const [activeTab, setActiveTab] = useState<"leads" | "clients" | "blog" | "services" | "faqs" | "config" | "google" | "reviews">("leads");
   
   // Google Workspace state variables
   const [isGoogleConnected, setIsGoogleConnected] = useState(isWorkspaceConnected());
@@ -113,6 +114,10 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
 
   // Clients state variables
   const [searchCpf, setSearchCpf] = useState("");
+  const [filterStatus, setFilterStatus] = useState<string>("Todos");
+  const [filterService, setFilterService] = useState<string>("Todos");
+  const [filterPeriod, setFilterPeriod] = useState<string>("Todos");
+  const [filterResponsible, setFilterResponsible] = useState<string>("Todos");
   const [editingClient, setEditingClient] = useState<any | null>(null);
   const [showNewClientForm, setShowNewClientForm] = useState(false);
   const [loadingClients, setLoadingClients] = useState(false);
@@ -284,8 +289,9 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
           });
           if (response.ok) {
             const profile = await response.json();
-            const allowedRoles = ["admin", "gestor", "supervisor", "analista", "atendente", "financeiro", "marketing"];
+            const allowedRoles = ["admin", "administrador", "gestor", "supervisor", "analista", "atendente", "consulta", "financeiro", "marketing"];
             if (profile.active && allowedRoles.includes(profile.role)) {
+              setUserRole(profile.role || "admin");
               setIsLoggedIn(true);
               setGoogleUserEmail(user.email || "");
               fetchLeads(idToken);
@@ -354,8 +360,9 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
 
       if (response.ok) {
         const profile = await response.json();
-        const allowedRoles = ["admin", "gestor", "supervisor", "analista", "atendente", "financeiro", "marketing"];
+        const allowedRoles = ["admin", "administrador", "gestor", "supervisor", "analista", "atendente", "consulta", "financeiro", "marketing"];
         if (profile.active && allowedRoles.includes(profile.role)) {
+          setUserRole(profile.role || "admin");
           const credential = GoogleAuthProvider.credentialFromResult(result);
           if (credential?.accessToken) {
             setWorkspaceToken(credential.accessToken);
@@ -439,8 +446,9 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
         }
       }
 
-      const allowedRoles = ["admin", "gestor", "supervisor", "analista", "atendente", "financeiro", "marketing"];
+      const allowedRoles = ["admin", "administrador", "gestor", "supervisor", "analista", "atendente", "consulta", "financeiro", "marketing"];
       if (profile && profile.active && allowedRoles.includes(profile.role)) {
+        setUserRole(profile.role || "admin");
         setIsLoggedIn(true);
         setGoogleUserEmail(profile.email || normEmail);
         setUsername("");
@@ -930,7 +938,20 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
             </div>
             <div className="text-left">
               <span className="block text-xs uppercase tracking-widest text-brand-gold-500 font-mono font-bold">SP ASSESSORIA</span>
-              <span className="text-sm sm:text-base font-bold font-display">Painel Administrativo Restrito</span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm sm:text-base font-bold font-display">Painel Administrativo Restrito</span>
+                {isLoggedIn && (
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono uppercase border ${
+                    userRole === "admin" || userRole === "administrador"
+                      ? "bg-brand-gold-500/20 text-brand-gold-400 border-brand-gold-500/40"
+                      : userRole === "atendente"
+                        ? "bg-blue-500/20 text-blue-300 border-blue-500/40"
+                        : "bg-gray-500/20 text-gray-300 border-gray-500/40"
+                  }`}>
+                    {userRole === "admin" || userRole === "administrador" ? "Administrador" : userRole === "atendente" ? "Atendente" : "Consulta"}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">

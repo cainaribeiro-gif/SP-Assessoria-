@@ -37,6 +37,7 @@ import { LegalModal } from "./components/LegalModals";
 import { WhatsAppButton } from "./components/WhatsAppButton";
 import { ChatWidget } from "./components/ChatWidget";
 import { AdminDashboard } from "./components/AdminDashboard";
+import { PublicRequestForm } from "./components/PublicRequestForm";
 import { Logo } from "./components/Logo";
 import defaultSiteData from "./site-data.json";
 import { ServiceItem, BlogPost, FAQItem, Review, ProcessStatus, TimelineStep } from "./types";
@@ -620,6 +621,7 @@ export default function App() {
               <a href="#quem-somos" className="text-sm font-medium text-gray-600 hover:text-brand-navy-900 transition-colors focus:outline-hidden">Quem Somos</a>
               <a href="#servicos" className="text-sm font-medium text-gray-600 hover:text-brand-navy-900 transition-colors focus:outline-hidden">Serviços</a>
               <a href="#como-funciona" className="text-sm font-medium text-gray-600 hover:text-brand-navy-900 transition-colors focus:outline-hidden">Como Funciona</a>
+              <a href="#solicitar-recurso" className="text-sm font-bold text-brand-gold-600 hover:text-brand-navy-900 transition-colors focus:outline-hidden">Abrir Solicitação</a>
               <a href="#portal-cliente" className="text-sm font-medium text-gray-600 hover:text-brand-navy-900 transition-colors focus:outline-hidden">Área do Cliente</a>
               <a href="#perguntas-frequentes" className="text-sm font-medium text-gray-600 hover:text-brand-navy-900 transition-colors focus:outline-hidden">Dúvidas</a>
               <a href="#blog" className="text-sm font-medium text-gray-600 hover:text-brand-navy-900 transition-colors focus:outline-hidden">Blog</a>
@@ -1357,6 +1359,21 @@ export default function App() {
             </div>
 
           </div>
+        </div>
+      </section>
+
+      {/* FORMULÁRIO PÚBLICO DE SOLICITAÇÃO DE RECURSO */}
+      <section id="solicitar-recurso" className="py-16 bg-gray-50/80 border-y border-gray-150 scroll-mt-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <PublicRequestForm 
+            onSuccessQueryProtocol={(protocol) => {
+              setTrackingProtocol(protocol);
+              const portalEl = document.getElementById("portal-cliente");
+              if (portalEl) {
+                portalEl.scrollIntoView({ behavior: "smooth" });
+              }
+            }} 
+          />
         </div>
       </section>
 

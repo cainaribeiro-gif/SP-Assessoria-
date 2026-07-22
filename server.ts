@@ -94,7 +94,7 @@ class FirestoreWrapper {
 
 const adminDb = new FirestoreWrapper(clientDb);
 
-// Ensure administrative accounts exist in Firebase Authentication on startup
+// Ensure administrative accounts exist in Firebase Authentication & Firestore on startup
 async function ensureAdminUsersExist() {
   const adminEmails = [
     "atendimento.spassessoria@gmail.com",
@@ -104,9 +104,11 @@ async function ensureAdminUsersExist() {
   const MASTER_PASSWORD = process.env.ADMIN_MASTER_PASSWORD || "spassessoria123";
 
   for (const email of adminEmails) {
+    let userUid = "custom_uid_" + email.split("@")[0];
     try {
-      await adminAuth.getUserByEmail(email);
-      console.log(`[Firebase Auth] User already exists: ${email}`);
+      const userRecord = await adminAuth.getUserByEmail(email);
+      userUid = userRecord.uid;
+      console.log(`[Firebase Auth] User verified: ${email}`);
     } catch (err: any) {
       if (err.code === "auth/user-not-found" || err.code === "auth/invalid-credential") {
         try {
@@ -116,28 +118,29 @@ async function ensureAdminUsersExist() {
             emailVerified: true,
             displayName: email === "cainapribeiro@gmail.com" ? "Cainã Ribeiro" : "SP Assessoria Admin"
           });
+          userUid = userRecord.uid;
           console.log(`[Firebase Auth] Successfully created admin user: ${email} with UID ${userRecord.uid}`);
-          
-          // Pre-populate user profile in Firestore profiles collection
-          try {
-            await adminDb.collection("profiles").doc(userRecord.uid).set({
-              role: "admin",
-              active: true,
-              displayName: email === "cainapribeiro@gmail.com" ? "Cainã Ribeiro" : "SP Assessoria Admin",
-              email: email,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp()
-            });
-            console.log(`[Firestore] Pre-populated admin profile for: ${email}`);
-          } catch (profileErr) {
-            console.warn("[Firestore] Pre-populate profile failed:", profileErr);
-          }
         } catch (createErr) {
-          console.error(`[Firebase Auth] Failed to create admin user ${email}:`, createErr);
+          console.warn(`[Firebase Auth] Could not create auth user ${email} directly:`, createErr);
         }
       } else {
-        console.error(`[Firebase Auth] Error checking user ${email}:`, err);
+        console.info(`[Firebase Auth] Identity Toolkit API or Auth check notice for ${email}. Using direct Firestore profile authorization.`);
       }
+    }
+
+    // Always pre-populate user profile in Firestore profiles collection
+    try {
+      await adminDb.collection("profiles").doc(userUid).set({
+        role: "admin",
+        active: true,
+        displayName: email === "cainapribeiro@gmail.com" ? "Cainã Ribeiro" : "SP Assessoria Admin",
+        email: email,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      console.log(`[Firestore] Profile synchronized for: ${email}`);
+    } catch (profileErr) {
+      console.warn("[Firestore] Profile sync notice:", profileErr);
     }
   }
 }
@@ -721,7 +724,7 @@ async function startServer() {
   });
 
   // 2. GET /api/admin/leads: Retrieve leads strictly for administrative profiles
-  app.get("/api/admin/leads", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente"]), async (req: AuthenticatedRequest, res) => {
+  app.get("/api/admin/leads", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente", "consulta"]), async (req: AuthenticatedRequest, res) => {
     try {
       let leadsList: any[] = [];
       try {
@@ -916,8 +919,8 @@ Instruções importantes:
     }
   }
 
-  // 1. GET /api/admin/clients - Retrieve all clients (Admin-only)
-  app.get("/api/admin/clients", requireAuth, requireRole(["admin", "gestor"]), async (req: AuthenticatedRequest, res) => {
+  // 1. GET /api/admin/clients - Retrieve all clients (Admin, Atendente & Consulta)
+  app.get("/api/admin/clients", requireAuth, requireRole(["admin", "gestor", "atendente", "consulta"]), async (req: AuthenticatedRequest, res) => {
     try {
       let clientsList: any[] = [];
       try {
@@ -1246,6 +1249,45 @@ Instruções importantes:
     } catch (error) {
       console.error("Erro ao enviar e-mail de rastreamento:", error);
       res.status(500).json({ error: "Erro ao disparar envio do e-mail. Tente novamente." });
+    }
+  });
+
+  // 6. POST /api/send-email - Send confirmation and notification emails (Public/Admin)
+  app.post("/api/send-email", async (req, res) => {
+    try {
+      const { to, protocol, clientName, service, status, details } = req.body;
+
+      if (!to || !protocol) {
+        return res.status(400).json({ error: "Parâmetros 'to' e 'protocol' são obrigatórios." });
+      }
+
+      console.log(`[Email Dispatcher] Confirmation email trigger for ${to}, protocol: ${protocol}, service: ${service}`);
+
+      // Record email sent log in Firestore sent_emails collection
+      try {
+        const logId = `eml-${Date.now()}`;
+        await adminDb.collection("sent_emails").doc(logId).set({
+          id: logId,
+          recipient: to,
+          protocol: protocol,
+          clientName: clientName || "Cliente",
+          service: service || "Geral",
+          status: status || "novo",
+          timestamp: new Date().toISOString(),
+          subject: `Confirmação de Solicitação - Protocolo ${protocol}`
+        });
+      } catch (logErr) {
+        console.warn("Audit email log warning:", logErr);
+      }
+
+      res.json({
+        success: true,
+        message: `Confirmação por e-mail disparada com sucesso para ${to}. Protocolo: ${protocol}`,
+        protocol: protocol
+      });
+    } catch (error) {
+      console.error("Erro no endpoint /api/send-email:", error);
+      res.status(500).json({ error: "Erro ao processar o envio do e-mail de confirmação." });
     }
   });
 

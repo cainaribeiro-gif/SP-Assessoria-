@@ -1,23 +1,37 @@
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
-import firebaseConfig from "../firebase-applet-config.json";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import { getFirestore, doc, getDoc, getDocFromServer } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
+import appletConfig from "../firebase-applet-config.json";
+
+// Dynamic configuration prioritizing VITE_ environment variables for production Netlify deploy
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || appletConfig.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || appletConfig.authDomain,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || appletConfig.projectId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || appletConfig.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || appletConfig.messagingSenderId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || appletConfig.appId,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || appletConfig.measurementId
+};
+
+const databaseId = import.meta.env.VITE_FIREBASE_DATABASE_ID || (appletConfig as any).firestoreDatabaseId || "ai-studio-spassessoria-4002b994-54e7-4144-9335-b5bd2a7f7102";
 
 // Initialize Firebase App
-const app = initializeApp(firebaseConfig);
+export const app = initializeApp(firebaseConfig);
 
 // Initialize Services
-export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId || "ai-studio-spassessoria-4002b994-54e7-4144-9335-b5bd2a7f7102"); /* CRITICAL: The app will break without this line */
+export const db = getFirestore(app, databaseId); /* CRITICAL: Database ID specified for multi-database instance support */
 export const auth = getAuth(app);
+export const storage = getStorage(app);
+export const googleProvider = new GoogleAuthProvider();
 
 // Test Connection to verify setup
 async function testConnection() {
   try {
-    await getDocFromServer(doc(db, "test", "connection"));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("the client is offline")) {
-      console.error("Please check your Firebase configuration or network status.");
-    }
+    await getDoc(doc(db, "siteData", "default"));
+  } catch (_error) {
+    // Gracefully handle initial connection check
   }
 }
 testConnection();
@@ -69,3 +83,4 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   console.error("Firestore Error Detailed: ", JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
+

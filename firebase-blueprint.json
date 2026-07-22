@@ -1,43 +1,81 @@
 {
   "entities": {
+    "Solicitacao": {
+      "title": "Solicitacao",
+      "description": "Public request or process case for tracking and management",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Firestore document ID" },
+        "protocol": { "type": "string", "maxLength": 50, "description": "Unique protocol number (e.g. SPA-2026-98123)" },
+        "clientName": { "type": "string", "maxLength": 150, "description": "Full name of applicant" },
+        "clientEmail": { "type": "string", "maxLength": 100, "description": "Email address" },
+        "clientPhone": { "type": "string", "maxLength": 30, "description": "Phone / WhatsApp number" },
+        "clientCpf": { "type": "string", "maxLength": 14, "description": "CPF number" },
+        "service": { "type": "string", "maxLength": 150, "description": "Requested service" },
+        "description": { "type": "string", "maxLength": 3000, "description": "Detailed description or notes" },
+        "status": {
+          "type": "string",
+          "enum": ["novo", "em_analise", "aguardando_documentos", "em_andamento", "concluido", "cancelado"],
+          "description": "Current status of the request"
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["alta", "media", "baixa"],
+          "description": "Priority level"
+        },
+        "assignedTo": { "type": "string", "maxLength": 100, "description": "Responsible staff member email or name" },
+        "attachments": { "type": "array", "description": "Array of uploaded attachment metadata" },
+        "timeline": { "type": "array", "description": "Audit history of state changes" },
+        "createdAt": { "type": "string", "description": "Creation ISO timestamp" },
+        "updatedAt": { "type": "string", "description": "Last update ISO timestamp" }
+      },
+      "required": ["protocol", "clientName", "clientEmail", "clientPhone", "clientCpf", "service", "status"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with role access permissions",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "maxLength": 100, "description": "User email address" },
+        "displayName": { "type": "string", "maxLength": 150, "description": "Display name" },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "administrador", "atendente", "consulta"],
+          "description": "Access control role"
+        },
+        "active": { "type": "boolean", "description": "Active account flag" },
+        "createdAt": { "type": "string", "description": "Account creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Account update timestamp" }
+      },
+      "required": ["email", "role"]
+    },
+    "Atividade": {
+      "title": "Atividade",
+      "description": "System audit trail log entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Document ID" },
+        "action": { "type": "string", "maxLength": 200, "description": "Description of action taken" },
+        "protocol": { "type": "string", "maxLength": 50, "description": "Associated request protocol if applicable" },
+        "userEmail": { "type": "string", "maxLength": 100, "description": "User who performed the action" },
+        "details": { "type": "string", "maxLength": 1000, "description": "Additional context details" },
+        "timestamp": { "type": "string", "description": "Action timestamp" }
+      },
+      "required": ["action", "userEmail", "timestamp"]
+    },
     "Lead": {
       "title": "Lead",
       "description": "User submitted contact or budget request",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "description": "Unique identifier of the lead"
-        },
-        "name": {
-          "type": "string",
-          "maxLength": 100,
-          "description": "Full name of the contact"
-        },
-        "email": {
-          "type": "string",
-          "maxLength": 100,
-          "description": "Email address of the contact"
-        },
-        "phone": {
-          "type": "string",
-          "maxLength": 30,
-          "description": "WhatsApp or phone number"
-        },
-        "service": {
-          "type": "string",
-          "maxLength": 100,
-          "description": "Service of interest"
-        },
-        "message": {
-          "type": "string",
-          "maxLength": 2000,
-          "description": "Message or details submitted"
-        },
-        "date": {
-          "type": "string",
-          "description": "Date and time of submission"
-        },
+        "id": { "type": "string", "description": "Unique identifier of the lead" },
+        "name": { "type": "string", "maxLength": 100, "description": "Full name of the contact" },
+        "email": { "type": "string", "maxLength": 100, "description": "Email address of the contact" },
+        "phone": { "type": "string", "maxLength": 30, "description": "WhatsApp or phone number" },
+        "service": { "type": "string", "maxLength": 100, "description": "Service of interest" },
+        "message": { "type": "string", "maxLength": 2000, "description": "Message or details submitted" },
+        "date": { "type": "string", "description": "Date and time of submission" },
         "status": {
           "type": "string",
           "enum": ["Novo", "Em Atendimento", "Concluído"],
@@ -56,106 +94,39 @@
       "description": "Unified dynamic layout and text content of the website",
       "type": "object",
       "properties": {
-        "siteConfig": {
-          "type": "object",
-          "description": "General site config including phones, email, hero titles"
-        },
-        "services": {
-          "type": "object",
-          "description": "Abas and service descriptions mapping"
-        },
-        "faqs": {
-          "type": "array",
-          "description": "List of FAQ items"
-        },
-        "blogPosts": {
-          "type": "array",
-          "description": "List of blog posts"
-        },
-        "reviews": {
-          "type": "array",
-          "description": "List of client reviews"
-        }
+        "siteConfig": { "type": "object", "description": "General site config" },
+        "services": { "type": "object", "description": "Services mapping" },
+        "faqs": { "type": "array", "description": "List of FAQs" },
+        "blogPosts": { "type": "array", "description": "List of blog posts" },
+        "reviews": { "type": "array", "description": "List of client reviews" }
       },
       "required": ["siteConfig", "services", "faqs", "blogPosts", "reviews"]
-    },
-    "Client": {
-      "title": "Client",
-      "description": "Client profile, registered by administrator for tracking",
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "Unique client ID"
-        },
-        "cpf": {
-          "type": "string",
-          "maxLength": 14,
-          "description": "Unique client CPF"
-        },
-        "name": {
-          "type": "string",
-          "maxLength": 150,
-          "description": "Full name of the client"
-        },
-        "email": {
-          "type": "string",
-          "maxLength": 100,
-          "description": "Email address of the client"
-        },
-        "phone": {
-          "type": "string",
-          "maxLength": 30,
-          "description": "WhatsApp or phone of the client"
-        },
-        "service": {
-          "type": "string",
-          "maxLength": 150,
-          "description": "Type of service (e.g. CNH, BPC)"
-        },
-        "protocol": {
-          "type": "string",
-          "maxLength": 50,
-          "description": "Protocol code (e.g. SP-2026-402)"
-        },
-        "currentStep": {
-          "type": "string",
-          "maxLength": 200,
-          "description": "Current status phrase"
-        },
-        "lastUpdate": {
-          "type": "string",
-          "description": "Timestamp of the last update"
-        },
-        "documents": {
-          "type": "array",
-          "description": "List of attached documents metadata"
-        },
-        "orderInfo": {
-          "type": "string",
-          "maxLength": 2000,
-          "description": "Details about order and registration"
-        },
-        "timeline": {
-          "type": "array",
-          "description": "Chronological history of status updates"
-        }
-      },
-      "required": ["cpf", "name", "email", "phone"]
     }
   },
   "firestore": {
+    "/solicitacoes/{id}": {
+      "schema": "Solicitacao",
+      "description": "Collection of process requests and cases"
+    },
+    "/profiles/{uid}": {
+      "schema": "UserProfile",
+      "description": "User profiles and role settings"
+    },
+    "/atividades/{id}": {
+      "schema": "Atividade",
+      "description": "Audit trail log collection"
+    },
     "/leads/{leadId}": {
       "schema": "Lead",
-      "description": "Collection of visitor requests and leads"
+      "description": "Collection of visitor contact requests and leads"
     },
     "/siteData/{docId}": {
       "schema": "SiteData",
-      "description": "Document holding all dynamic site configuration"
+      "description": "Document holding dynamic site configuration"
     },
     "/clients/{clientId}": {
-      "schema": "Client",
-      "description": "Collection of registered client tracking profiles"
+      "schema": "Solicitacao",
+      "description": "Legacy client tracking collection mapping to Solicitacao"
     }
   }
 }

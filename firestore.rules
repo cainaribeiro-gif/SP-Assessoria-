@@ -1,8 +1,73 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data;
+    }
+    
+    function isAdmin() {
+      return isSignedIn() && (
+        ("email" in request.auth.token && request.auth.token.email in ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com", "atendimento@sprecursosadm.com.br"]) ||
+        (exists(/databases/$(database)/documents/profiles/$(request.auth.uid)) && 
+         (getUserData().role == "admin" || getUserData().role == "administrador"))
+      );
+    }
+    
+    function isStaff() {
+      return isSignedIn() && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/profiles/$(request.auth.uid)) && 
+         (getUserData().role == "atendente" || getUserData().role == "consulta"))
+      );
+    }
+
+    // Default deny catch-all
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
+    }
+
+    // Solicitacoes & Clients (Public request submission & public protocol query)
+    match /solicitacoes/{id} {
+      allow create: if true;
+      allow read: if true;
+      allow update, delete: if isStaff();
+    }
+    
+    match /clients/{clientId} {
+      allow create: if true;
+      allow read: if true;
+      allow update, delete: if isStaff();
+    }
+
+    // Public contact leads
+    match /leads/{leadId} {
+      allow create: if true;
+      allow read, update, delete: if isStaff();
+    }
+
+    // User Profiles
+    match /profiles/{uid} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin() || (isSignedIn() && request.auth.uid == uid);
+    }
+
+    // Audit Trail (Atividades)
+    match /atividades/{id} {
+      allow create: if true;
+      allow read: if isStaff();
+      allow update, delete: if isAdmin();
+    }
+
+    // Dynamic Site Config
+    match /siteData/{docId} {
+      allow read: if true;
+      allow write: if isStaff();
     }
   }
 }

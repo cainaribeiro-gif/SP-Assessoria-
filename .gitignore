@@ -1,8 +1,15 @@
 node_modules/
-build/
 dist/
+build/
 coverage/
+.netlify/
 .DS_Store
 *.log
-.env*
+
+# Protect environment variable files with real secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 !.env.example
