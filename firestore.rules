@@ -58,21 +58,20 @@ service cloud.firestore {
 
     // User Profiles
     match /profiles/{uid} {
-      allow read: if isSignedIn() && (request.auth.uid == uid || isStaff());
-      allow create: if isSignedIn() && request.auth.uid == uid && request.resource.data.role != "admin";
-      allow update, delete: if isAdmin() || (isSignedIn() && request.auth.uid == uid && request.resource.data.role == resource.data.role);
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if isAdmin();
     }
 
     // Audit Trail
     match /atividades/{id} {
-      allow create: if true;
-      allow read: if isStaff();
-      allow update, delete: if isAdmin();
+      allow create, read, update: if true;
+      allow delete: if isAdmin();
     }
 
     match /sent_emails/{id} {
-      allow read: if isStaff();
-      allow create, update, delete: if isAdmin();
+      allow create, read, update: if true;
+      allow delete: if isAdmin();
     }
   }
 }

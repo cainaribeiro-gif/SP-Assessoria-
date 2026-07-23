@@ -96,14 +96,12 @@ const clientDb = getClientFirestore(clientApp, (firebaseConfig as any).firestore
 const targetDatabaseId = (firebaseConfig as any).firestoreDatabaseId || "ai-studio-spassessoria-4002b994-54e7-4144-9335-b5bd2a7f7102";
 
 let rawAdminDb: any = null;
-if (firebaseClientEmail && firebasePrivateKey) {
+try {
+  rawAdminDb = getAdminFirestore(adminApp, targetDatabaseId);
+} catch (_e) {
   try {
-    rawAdminDb = getAdminFirestore(adminApp, targetDatabaseId);
-  } catch (_e) {
-    try {
-      rawAdminDb = getAdminFirestore(adminApp);
-    } catch (_e2) {}
-  }
+    rawAdminDb = getAdminFirestore(adminApp);
+  } catch (_e2) {}
 }
 
 function isAuthOrPermissionError(err: any): boolean {
