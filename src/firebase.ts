@@ -15,13 +15,13 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || appletConfig.measurementId
 };
 
-const databaseId = import.meta.env.VITE_FIREBASE_DATABASE_ID || (appletConfig as any).firestoreDatabaseId || "ai-studio-spassessoria-4002b994-54e7-4144-9335-b5bd2a7f7102";
+const databaseId = (appletConfig as any).firestoreDatabaseId;
 
 // Initialize Firebase App
 export const app = initializeApp(firebaseConfig);
 
 // Initialize Services
-export const db = getFirestore(app, databaseId); /* CRITICAL: Database ID specified for multi-database instance support */
+export const db = databaseId ? getFirestore(app, databaseId) : getFirestore(app);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
@@ -29,7 +29,7 @@ export const googleProvider = new GoogleAuthProvider();
 // Test Connection to verify setup
 async function testConnection() {
   try {
-    await getDoc(doc(db, "siteData", "default"));
+    await getDoc(doc(db, "siteData", "main"));
   } catch (_error) {
     // Gracefully handle initial connection check
   }

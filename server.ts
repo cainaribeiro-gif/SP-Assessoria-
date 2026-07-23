@@ -2,10 +2,12 @@ import express from "express";
 import path from "path";
 import dotenv from "dotenv";
 import fs from "fs";
+import nodemailer from "nodemailer";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
-import { initializeApp as initializeAdminApp, getApps as getAdminApps, getApp as getAdminApp } from "firebase-admin/app";
+import { initializeApp as initializeAdminApp, getApps as getAdminApps, getApp as getAdminApp, cert } from "firebase-admin/app";
 import { getAuth as getAdminAuth } from "firebase-admin/auth";
+import { getFirestore as getAdminFirestore } from "firebase-admin/firestore";
 
 // Import client Web SDK to access the named database securely via API Key (resolves GCP IAM issues)
 import { initializeApp as initializeClientApp } from "firebase/app";
@@ -23,25 +25,102 @@ import firebaseConfig from "./firebase-applet-config.json";
 
 dotenv.config();
 
-// Initialize Firebase Admin SDK using Application Default Credentials (for cryptographically verifying Auth JWTs)
+// Initialize Firebase Admin SDK with optional service account credentials
+const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId;
+const firebaseClientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+const firebasePrivateKey = process.env.FIREBASE_PRIVATE_KEY
+  ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
+  : undefined;
+
 const adminApp = getAdminApps().length === 0 
-  ? initializeAdminApp({
-      projectId: firebaseConfig.projectId
-    })
+  ? (firebaseClientEmail && firebasePrivateKey
+      ? initializeAdminApp({
+          credential: cert({
+            projectId: firebaseProjectId,
+            clientEmail: firebaseClientEmail,
+            privateKey: firebasePrivateKey
+          }),
+          projectId: firebaseProjectId
+        })
+      : initializeAdminApp({
+          projectId: firebaseProjectId
+        }))
   : getAdminApp();
 
 const adminAuth = getAdminAuth(adminApp);
 
-// Initialize Firebase Client SDK for Firestore database connections (fully operational via apiKey)
+// Helper function to send email notifications via Gmail SMTP
+export async function sendEmailNotification(data: {
+  to?: string;
+  subject: string;
+  html: string;
+  text?: string;
+}): Promise<boolean> {
+  const gmailUser = process.env.GMAIL_USER || "atendimento.spassessoria@gmail.com";
+  const gmailPass = process.env.GMAIL_APP_PASSWORD;
+
+  if (!gmailPass) {
+    console.log(`[Nodemailer Notice] GMAIL_APP_PASSWORD not configured. Skipping SMTP dispatch for "${data.subject}".`);
+    return false;
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: gmailUser,
+        pass: gmailPass
+      }
+    });
+
+    await transporter.sendMail({
+      from: `"SP Assessoria" <${gmailUser}>`,
+      to: data.to || gmailUser,
+      subject: data.subject,
+      text: data.text || data.subject,
+      html: data.html
+    });
+
+    console.log(`[Nodemailer Success] Email successfully sent to ${data.to || gmailUser}`);
+    return true;
+  } catch (err) {
+    console.error("[Nodemailer Error] Error sending email:", err);
+    return false;
+  }
+}
+
+// Initialize Firebase Client SDK for Firestore fallback if needed
 const clientApp = initializeClientApp(firebaseConfig);
 const clientDb = getClientFirestore(clientApp, (firebaseConfig as any).firestoreDatabaseId || "ai-studio-spassessoria-4002b994-54e7-4144-9335-b5bd2a7f7102");
 
-// Build robust object-oriented wrapper for compatibility with original code
+const targetDatabaseId = (firebaseConfig as any).firestoreDatabaseId || "ai-studio-spassessoria-4002b994-54e7-4144-9335-b5bd2a7f7102";
+
+let rawAdminDb: any = null;
+if (firebaseClientEmail && firebasePrivateKey) {
+  try {
+    rawAdminDb = getAdminFirestore(adminApp, targetDatabaseId);
+  } catch (_e) {
+    try {
+      rawAdminDb = getAdminFirestore(adminApp);
+    } catch (_e2) {}
+  }
+}
+
 class DocumentReferenceWrapper {
-  constructor(private db: any, private collectionPath: string, private docId: string) {}
+  constructor(private collectionPath: string, private docId: string) {}
 
   async get() {
-    const docRef = doc(this.db, this.collectionPath, this.docId);
+    if (rawAdminDb) {
+      try {
+        const snap = await rawAdminDb.collection(this.collectionPath).doc(this.docId).get();
+        return snap;
+      } catch (err: any) {
+        if (!err.message?.includes("UNAUTHENTICATED") && !err.message?.includes("16")) {
+          throw err;
+        }
+      }
+    }
+    const docRef = doc(clientDb, this.collectionPath, this.docId);
     const snap = await getDoc(docRef);
     return {
       exists: snap.exists(),
@@ -50,32 +129,63 @@ class DocumentReferenceWrapper {
     };
   }
 
-  async set(data: any) {
-    const docRef = doc(this.db, this.collectionPath, this.docId);
-    await setDoc(docRef, data);
+  async set(data: any, options?: any) {
+    if (rawAdminDb) {
+      try {
+        await rawAdminDb.collection(this.collectionPath).doc(this.docId).set(data, options);
+        return;
+      } catch (err: any) {
+        if (!err.message?.includes("UNAUTHENTICATED") && !err.message?.includes("16")) {
+          throw err;
+        }
+      }
+    }
+    const docRef = doc(clientDb, this.collectionPath, this.docId);
+    await setDoc(docRef, data, options);
   }
 
   async delete() {
-    const docRef = doc(this.db, this.collectionPath, this.docId);
+    if (rawAdminDb) {
+      try {
+        await rawAdminDb.collection(this.collectionPath).doc(this.docId).delete();
+        return;
+      } catch (err: any) {
+        if (!err.message?.includes("UNAUTHENTICATED") && !err.message?.includes("16")) {
+          throw err;
+        }
+      }
+    }
+    const docRef = doc(clientDb, this.collectionPath, this.docId);
     await deleteDoc(docRef);
   }
 }
 
 class CollectionReferenceWrapper {
-  constructor(private db: any, private collectionPath: string) {}
+  constructor(private collectionPath: string) {}
 
   doc(docId: string) {
-    return new DocumentReferenceWrapper(this.db, this.collectionPath, docId);
+    return new DocumentReferenceWrapper(this.collectionPath, docId);
   }
 
   async get() {
-    const colRef = collection(this.db, this.collectionPath);
+    if (rawAdminDb) {
+      try {
+        const snap = await rawAdminDb.collection(this.collectionPath).get();
+        return snap;
+      } catch (err: any) {
+        if (!err.message?.includes("UNAUTHENTICATED") && !err.message?.includes("16")) {
+          throw err;
+        }
+      }
+    }
+    const colRef = collection(clientDb, this.collectionPath);
     const snap = await getDocs(colRef);
     const docs = snap.docs.map(docSnap => ({
       id: docSnap.id,
       data: () => docSnap.data()
     }));
     return {
+      empty: docs.length === 0,
       docs,
       forEach: (callback: (doc: any) => void) => {
         docs.forEach(callback);
@@ -84,15 +194,13 @@ class CollectionReferenceWrapper {
   }
 }
 
-class FirestoreWrapper {
-  constructor(private db: any) {}
-
+class SmartFirestore {
   collection(collectionPath: string) {
-    return new CollectionReferenceWrapper(this.db, collectionPath);
+    return new CollectionReferenceWrapper(collectionPath);
   }
 }
 
-const adminDb = new FirestoreWrapper(clientDb);
+const adminDb = new SmartFirestore();
 
 // Ensure administrative accounts exist in Firebase Authentication & Firestore on startup
 async function ensureAdminUsersExist() {
@@ -389,12 +497,10 @@ async function createAuditLog(uid: string, email: string, action: string, resour
 // Memory-based cache for duplicate submissions
 const recentSubmissions = new Map<string, number>();
 
-async function startServer() {
-  const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const app = express();
 
-  // Middleware for parsing JSON requests with size limits
-  app.use(express.json({ limit: "5mb" }));
+// Middleware for parsing JSON requests with size limits
+app.use(express.json({ limit: "5mb" }));
 
   // CORS Middleware
   const allowedOrigins = process.env.ALLOWED_ORIGINS
@@ -672,6 +778,41 @@ async function startServer() {
         const currentBackup = readLeadsBackup();
         currentBackup.push(newLead);
         writeLeadsBackup(currentBackup);
+      }
+
+      // Dispatch notification email to atendimento.spassessoria@gmail.com
+      const adminNoticeHtml = `
+        <h2>Novo Lead Recebido - SP Assessoria</h2>
+        <p><strong>Nome:</strong> ${cleanName}</p>
+        <p><strong>WhatsApp / Telefone:</strong> ${cleanPhone}</p>
+        <p><strong>E-mail:</strong> ${cleanEmail || "Não informado"}</p>
+        <p><strong>Serviço Solicitado:</strong> ${cleanService}</p>
+        <p><strong>Tipo de Solicitação:</strong> ${cleanType}</p>
+        <p><strong>Mensagem:</strong> ${cleanMessage || "Nenhuma mensagem enviada"}</p>
+        <p><strong>Data:</strong> ${newLead.date}</p>
+      `;
+
+      sendEmailNotification({
+        to: "atendimento.spassessoria@gmail.com",
+        subject: `[Novo Lead] ${cleanName} - ${cleanService}`,
+        html: adminNoticeHtml
+      }).catch(err => console.warn("Background admin email dispatch notice:", err));
+
+      if (cleanEmail) {
+        const leadReceiptHtml = `
+          <h2>Olá, ${cleanName}!</h2>
+          <p>Agradecemos pelo seu contato com a <strong>SP Assessoria de Recursos Administrativos</strong>.</p>
+          <p>Recebemos sua solicitação para o serviço <strong>${cleanService}</strong> com sucesso.</p>
+          <p>Sua mensagem já foi encaminhada para nossa equipe de especialistas, que entrará em contato em breve através do seu WhatsApp/telefone cadastrado (${cleanPhone}).</p>
+          <br>
+          <p>Atenciosamente,<br><strong>Equipe SP Assessoria</strong><br>atendimento.spassessoria@gmail.com</p>
+        `;
+
+        sendEmailNotification({
+          to: cleanEmail,
+          subject: `Confirmação de Recebimento - SP Assessoria`,
+          html: leadReceiptHtml
+        }).catch(err => console.warn("Background lead receipt email notice:", err));
       }
 
       res.json({ success: true, message: "Solicitação recebida com sucesso." });
@@ -1296,49 +1437,57 @@ Instruções importantes:
     res.json({ status: "ok", time: new Date().toISOString() });
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
+  export default app;
+  export { app };
 
-  // Startup Sync: push current local site-data.json and clients-data.json content to Firestore to ensure consistency
-  try {
-    const localData = readSiteDataFile();
-    if (localData) {
-      console.log("Startup Sync: Syncing local site-data.json to Firestore...");
-      const payload = { ...localData };
-      delete payload.leads; // leads are stored separately
-      await adminDb.collection("siteData").doc("main").set(payload);
-      console.log("Startup Sync: site-data.json synchronized successfully!");
+  async function startServer() {
+    const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+    // Vite middleware for development
+    if (process.env.NODE_ENV !== "production") {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
     }
 
-    const localClients = readClientsDataFile();
-    if (localClients && localClients.length > 0) {
-      console.log("Startup Sync: Syncing local clients to Firestore...");
-      for (const client of localClients) {
-        if (client.id) {
-          await adminDb.collection("clients").doc(client.id).set(client);
-        }
+    // Startup Sync: push current local site-data.json and clients-data.json content to Firestore to ensure consistency
+    try {
+      const localData = readSiteDataFile();
+      if (localData) {
+        console.log("Startup Sync: Syncing local site-data.json to Firestore...");
+        const payload = { ...localData };
+        delete payload.leads; // leads are stored separately
+        await adminDb.collection("siteData").doc("main").set(payload);
+        console.log("Startup Sync: site-data.json synchronized successfully!");
       }
-      console.log("Startup Sync: clients-data.json synchronized successfully!");
+
+      const localClients = readClientsDataFile();
+      if (localClients && localClients.length > 0) {
+        console.log("Startup Sync: Syncing local clients to Firestore...");
+        for (const client of localClients) {
+          if (client.id) {
+            await adminDb.collection("clients").doc(client.id).set(client);
+          }
+        }
+        console.log("Startup Sync: clients-data.json synchronized successfully!");
+      }
+    } catch (syncError) {
+      console.error("Startup Sync Warning: Failed to sync local data to Firestore on boot:", syncError);
     }
-  } catch (syncError) {
-    console.error("Startup Sync Warning: Failed to sync local data to Firestore on boot:", syncError);
+
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-}
-
-startServer();
+  if (process.env.NETLIFY !== "true" && process.env.AWS_LAMBDA_FUNCTION_NAME === undefined) {
+    startServer();
+  }
