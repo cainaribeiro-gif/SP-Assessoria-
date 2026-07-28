@@ -35,7 +35,7 @@ import {
 import { BudgetModal } from "./components/BudgetModal";
 import { LegalModal } from "./components/LegalModals";
 import { WhatsAppButton } from "./components/WhatsAppButton";
-import { ChatWidget } from "./components/ChatWidget";
+import { WhatsAppLeadModal } from "./components/WhatsAppLeadModal";
 import { AdminDashboard } from "./components/AdminDashboard";
 import { PublicRequestForm } from "./components/PublicRequestForm";
 import { Logo } from "./components/Logo";
@@ -85,7 +85,7 @@ const HOW_IT_WORKS = [
   {
     step: "1",
     title: "Primeiro Contato",
-    description: "Você entra em contato pelo WhatsApp, e-mail ou assistente virtual contando sua necessidade.",
+    description: "Você entra em contato pelo WhatsApp, e-mail ou formulário contando sua necessidade.",
     icon: MessageSquare
   },
   {
@@ -362,6 +362,9 @@ export default function App() {
   // Budget Modal state
   const [budgetModalOpen, setBudgetModalOpen] = useState(false);
 
+  // WhatsApp Lead Capture Modal state
+  const [whatsAppModalOpen, setWhatsAppModalOpen] = useState(false);
+
   // Legal Modal states
   const [legalModalOpen, setLegalModalOpen] = useState(false);
   const [legalModalType, setLegalModalType] = useState<"privacy" | "terms">("privacy");
@@ -577,10 +580,8 @@ export default function App() {
     }, 1500);
   };
 
-  const handleWhatsAppDirect = (p: "primary" | "secondary") => {
-    const phone = p === "primary" ? siteConfigData.phone : siteConfigData.phoneAux;
-    const text = "Olá! Gostaria de um atendimento profissional para analisar o meu caso de recurso administrativo.";
-    window.open(`https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(text)}`, "_blank");
+  const handleWhatsAppDirect = (p: "primary" | "secondary" = "primary") => {
+    setWhatsAppModalOpen(true);
   };
 
   const handleSocialClick = (platform: "instagram") => {
@@ -1257,14 +1258,30 @@ export default function App() {
                   {/* Documents & Files Attached */}
                   {trackingResult.documents && trackingResult.documents.length > 0 && (
                     <div className="p-4 bg-gray-50 border border-gray-150 rounded-xl text-xs space-y-2 mt-4">
-                      <strong className="text-brand-navy-900 block font-display">Documentos Cadastrados:</strong>
+                      <strong className="text-brand-navy-900 block font-display">Documentos Cadastrados / Anexados:</strong>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {trackingResult.documents.map((doc: string, idx: number) => (
-                          <div key={idx} className="flex items-center gap-2 p-2 bg-white rounded-lg border border-gray-200 text-gray-600">
-                            <FileText className="w-4 h-4 text-brand-gold-500 flex-shrink-0" />
-                            <span className="truncate">{doc}</span>
-                          </div>
-                        ))}
+                        {trackingResult.documents.map((doc: any, idx: number) => {
+                          const docName = typeof doc === "string" ? doc : (doc.name || "Documento");
+                          const docUrl = typeof doc === "string" && (doc.startsWith("http") || doc.startsWith("data:")) ? doc : (doc.url || "");
+                          return (
+                            <div key={idx} className="flex items-center justify-between p-2.5 bg-white rounded-lg border border-gray-200 text-gray-700 shadow-2xs">
+                              <div className="flex items-center gap-2 truncate mr-2">
+                                <FileText className="w-4 h-4 text-brand-gold-500 flex-shrink-0" />
+                                <span className="truncate font-medium text-xs">{docName}</span>
+                              </div>
+                              {docUrl && (
+                                <a
+                                  href={docUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="px-2.5 py-1 bg-brand-navy-900 text-white text-[10px] font-bold rounded-md hover:bg-brand-navy-800 transition-colors flex items-center gap-1 flex-shrink-0 cursor-pointer"
+                                >
+                                  <span>Abrir</span>
+                                </a>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -1426,9 +1443,9 @@ export default function App() {
             {/* Reviews list */}
             <div className="lg:col-span-7 space-y-6">
               <div className="grid grid-cols-1 gap-6">
-                {reviews.filter((rev: any) => rev.approved !== false).map((rev) => (
+                {reviews.filter((rev: any) => rev.approved !== false).map((rev: any, idx: number) => (
                   <div 
-                    key={rev.id} 
+                    key={rev.id || `app-rev-${idx}`} 
                     className="p-6 bg-white border border-gray-150 rounded-xl text-left relative shadow-xs"
                   >
                     <div className="flex items-center justify-between mb-3">
@@ -2069,10 +2086,13 @@ export default function App() {
       </footer>
 
       {/* FLOATING ACTION OVERLAYS */}
-      <WhatsAppButton />
-      <ChatWidget />
+      <WhatsAppButton onOpenModal={() => setWhatsAppModalOpen(true)} />
 
       {/* MODALS */}
+      <WhatsAppLeadModal 
+        isOpen={whatsAppModalOpen} 
+        onClose={() => setWhatsAppModalOpen(false)} 
+      />
       <BudgetModal 
         isOpen={budgetModalOpen} 
         onClose={() => setBudgetModalOpen(false)} 

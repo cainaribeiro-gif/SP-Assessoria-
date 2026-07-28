@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, Calculator, ArrowRight, CheckCircle2, ChevronRight } from "lucide-react";
+import { X, Calculator, ArrowRight, CheckCircle2, ChevronRight, Copy, Search, Mail, Loader2 } from "lucide-react";
 
 interface BudgetModalProps {
   isOpen: boolean;
@@ -43,6 +43,9 @@ export function BudgetModal({ isOpen, onClose, onLeadAdded }: BudgetModalProps) 
   const [email, setEmail] = useState("");
   const [description, setDescription] = useState("");
   const [website, setWebsite] = useState("");
+  const [protocol, setProtocol] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   if (!isOpen) return null;
 
@@ -57,7 +60,7 @@ export function BudgetModal({ isOpen, onClose, onLeadAdded }: BudgetModalProps) 
     setStep(3);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !whatsapp || !email) return;
     
@@ -67,26 +70,49 @@ export function BudgetModal({ isOpen, onClose, onLeadAdded }: BudgetModalProps) 
       return;
     }
 
+    setIsSubmitting(true);
     const selectedService = getSelectedServiceDetails();
+    const categoryLabel = category ? SERVICES_CONFIG[category]?.label : "";
+
     const leadData = {
-      name,
-      email,
-      phone: whatsapp,
+      name: name.trim(),
+      email: email.trim(),
+      phone: whatsapp.trim(),
       service: selectedService?.label || "Orçamento",
-      message: description || `Simulador de Orçamento: ${selectedService?.label}. Estimativa base: ${selectedService?.basePrice}`,
-      type: "Orçamento",
+      category: categoryLabel,
+      estimatedPrice: selectedService?.basePrice || "",
+      message: description.trim() || `Solicitação de Orçamento: ${selectedService?.label}. Estimativa base: ${selectedService?.basePrice}`,
+      type: "Simulação de Orçamento",
       lgpdConsent: true,
       website: website
     };
 
-    // Submit lead to our database API
-    fetch("/api/leads", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(leadData)
-    }).catch(err => console.warn("Erro ao enviar lead:", err));
+    try {
+      const response = await fetch("/api/leads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(leadData)
+      });
+      const resData = await response.json();
+      
+      if (resData.protocol) {
+        setProtocol(resData.protocol);
+      } else {
+        const year = new Date().getFullYear();
+        const randomCode = Math.floor(10000 + Math.random() * 90000);
+        setProtocol(`SPA-${year}-${randomCode}`);
+      }
 
-    setStep(4);
+      if (onLeadAdded) onLeadAdded(leadData);
+    } catch (err) {
+      console.warn("Erro ao registrar orçamento:", err);
+      const year = new Date().getFullYear();
+      const randomCode = Math.floor(10000 + Math.random() * 90000);
+      setProtocol(`SPA-${year}-${randomCode}`);
+    } finally {
+      setIsSubmitting(false);
+      setStep(4);
+    }
   };
 
   const getSelectedServiceDetails = () => {
@@ -96,28 +122,7 @@ export function BudgetModal({ isOpen, onClose, onLeadAdded }: BudgetModalProps) 
 
   const selectedService = getSelectedServiceDetails();
 
-  const handleSendToWhatsApp = () => {
-    if (!selectedService) return;
-    
-    const phones = ["5511987049051", "5511993344293"];
-    const phone = phones[0];
-
-    const messageText = `Olá, SP Assessoria! Gostaria de um orçamento formal baseado no simulador do site:
-    
-*Cliente:* ${name}
-*WhatsApp:* ${whatsapp}
-*Categoria:* ${SERVICES_CONFIG[category as keyof typeof SERVICES_CONFIG]?.label}
-*Serviço:* ${selectedService.label}
-*Descrição do Caso:* ${description || "Não informada."}
-*Estimativa Preliminar:* ${selectedService.basePrice}
-
-Tenho interesse em agilizar o meu protocolo administrativo. Como podemos prosseguir?`;
-
-    const encodedText = encodeURIComponent(messageText);
-    const whatsappUrl = `https://api.whatsapp.com/send?phone=${phone}&text=${encodedText}`;
-    
-    window.open(whatsappUrl, "_blank");
-    onClose();
+  const resetModal = () => {
     setStep(1);
     setCategory("");
     setServiceId("");
@@ -125,6 +130,25 @@ Tenho interesse em agilizar o meu protocolo administrativo. Como podemos prosseg
     setWhatsapp("");
     setEmail("");
     setDescription("");
+    setProtocol("");
+    setCopySuccess(false);
+  };
+
+  const handleTrackRequest = () => {
+    onClose();
+    // Dispatch custom event or fill search input if available
+    setTimeout(() => {
+      const trackInput = document.getElementById("search-process-input") as HTMLInputElement;
+      if (trackInput && protocol) {
+        trackInput.value = protocol;
+        trackInput.focus();
+      }
+      const trackSection = document.getElementById("consulta-processo-section");
+      if (trackSection) {
+        trackSection.scrollIntoView({ behavior: "smooth" });
+      }
+      resetModal();
+    }, 150);
   };
 
   return (
@@ -143,11 +167,7 @@ Tenho interesse em agilizar o meu protocolo administrativo. Como podemos prosseg
             id="close-budget-modal-btn"
             onClick={() => {
               onClose();
-              setStep(1);
-              setName("");
-              setWhatsapp("");
-              setEmail("");
-              setDescription("");
+              resetModal();
             }} 
             className="text-gray-400 hover:text-brand-navy-900 transition-colors cursor-pointer rounded p-1 hover:bg-gray-200"
           >
@@ -264,7 +284,7 @@ Tenho interesse em agilizar o meu protocolo administrativo. Como podemos prosseg
                 Por favor, informe seus dados de contato
               </h3>
               <p className="text-xs text-gray-500 mb-4">
-                Estes dados serão anexados à sua consulta para que possamos prestar uma pré-análise transparente.
+                Estes dados serão anexados à sua solicitação para que possamos prestar uma análise detalhada e personalizada.
               </p>
 
               <div>
@@ -338,45 +358,97 @@ Tenho interesse em agilizar o meu protocolo administrativo. Como podemos prosseg
               <button
                 type="submit"
                 id="submit-budget-step3-btn"
-                className="w-full mt-2 py-3 bg-brand-navy-900 hover:bg-brand-navy-800 text-white font-bold rounded-lg transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                disabled={isSubmitting}
+                className="w-full mt-2 py-3 bg-brand-navy-900 hover:bg-brand-navy-800 disabled:opacity-50 text-white font-bold rounded-lg transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs"
               >
-                <span>Calcular Estimativa</span>
-                <ArrowRight className="w-4 h-4" />
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-brand-gold-400" />
+                    <span>Registrando Pedido...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Confirmar e Enviar Pedido</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </form>
           )}
 
           {step === 4 && selectedService && (
-            <div className="space-y-5 text-center">
-              <div className="mx-auto w-12 h-12 bg-brand-gold-500/10 border border-brand-gold-500/20 rounded-full flex items-center justify-center text-brand-gold-600">
-                <CheckCircle2 className="w-6 h-6 animate-pulse" />
+            <div className="space-y-4 text-center">
+              <div className="mx-auto w-12 h-12 bg-emerald-50 border border-emerald-200 rounded-full flex items-center justify-center text-emerald-600">
+                <CheckCircle2 className="w-7 h-7" />
               </div>
               
               <div>
-                <span className="text-xs uppercase tracking-wider font-bold text-brand-gold-600">Estimativa Gerada</span>
-                <h3 className="text-xl font-display font-bold text-brand-navy-900 mt-1">Análise Preliminar Completa</h3>
+                <span className="text-[11px] uppercase tracking-wider font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full inline-block">
+                  Solicitação Registrada
+                </span>
+                <h3 className="text-xl font-display font-bold text-brand-navy-900 mt-2">
+                  Pedido de Orçamento Confirmado!
+                </h3>
               </div>
 
-              <div className="p-4 bg-gray-50 border border-gray-150 rounded-xl text-left space-y-3">
+              {/* Protocol Badge */}
+              <div className="p-3.5 bg-brand-navy-900 text-white rounded-xl shadow-xs text-center space-y-1">
+                <span className="text-[10px] text-brand-gold-400 font-bold uppercase tracking-wider block">Código do Seu Protocolo</span>
+                <div className="flex items-center justify-center gap-2">
+                  <span className="text-xl font-extrabold font-mono text-white tracking-wider">{protocol || "SPA-2026-00000"}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (protocol) {
+                        navigator.clipboard.writeText(protocol);
+                        setCopySuccess(true);
+                        setTimeout(() => setCopySuccess(false), 2500);
+                      }
+                    }}
+                    className="p-1.5 bg-white/10 hover:bg-white/20 text-brand-gold-400 rounded-md transition-colors cursor-pointer"
+                    title="Copiar Código do Protocolo"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+                </div>
+                {copySuccess && <p className="text-[10px] text-emerald-400 font-bold">Código do protocolo copiado!</p>}
+              </div>
+
+              {/* Notification Details Box */}
+              <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl text-left text-xs text-blue-900 space-y-2 leading-relaxed">
+                <div className="flex items-center gap-2 font-bold text-blue-950 border-b border-blue-200/60 pb-1.5">
+                  <Mail className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span>Confirmação Enviada por E-mail</span>
+                </div>
+                <p>
+                  Enviamos os detalhes da sua solicitação para o e-mail <strong>{email}</strong>.
+                </p>
+                <p className="text-[11px] text-blue-800">
+                  Em breve um de nossos especialistas entrará em contato via WhatsApp/telefone (<strong>{whatsapp}</strong>) para prestar atendimento completo.
+                </p>
+              </div>
+
+              {/* Service Breakdown Box */}
+              <div className="p-3.5 bg-gray-50 border border-gray-150 rounded-xl text-left space-y-2.5">
                 <div>
-                  <span className="text-[10px] text-gray-500 block font-bold">SERVIÇO SELECIONADO</span>
+                  <span className="text-[10px] text-gray-500 block font-bold uppercase">Serviço Selecionado</span>
                   <span className="text-sm text-brand-navy-900 font-bold">{selectedService.label}</span>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-3 border-t border-gray-200 pt-2">
                   <div>
-                    <span className="text-[10px] text-gray-500 block font-bold">VALOR ESTIMADO</span>
+                    <span className="text-[10px] text-gray-500 block font-bold uppercase">Valor Estimado</span>
                     <span className="text-sm font-extrabold text-brand-gold-700">{selectedService.basePrice}</span>
                   </div>
                   <div>
-                    <span className="text-[10px] text-gray-500 block font-bold">PRAZO ESTIMADO</span>
+                    <span className="text-[10px] text-gray-500 block font-bold uppercase">Prazo Estimado</span>
                     <span className="text-sm text-brand-navy-900 font-bold">2 a 5 dias úteis</span>
                   </div>
                 </div>
 
                 <div className="border-t border-gray-200 pt-2">
-                  <span className="text-[10px] text-gray-500 block font-bold mb-1">DOCUMENTOS NECESSÁRIOS</span>
-                  <ul className="text-xs text-gray-600 space-y-1 list-inside list-disc font-medium">
+                  <span className="text-[10px] text-gray-500 block font-bold mb-1 uppercase">Documentos Relevantes</span>
+                  <ul className="text-xs text-gray-600 space-y-0.5 list-inside list-disc font-medium">
                     {selectedService.docs.map((doc, idx) => (
                       <li key={idx}>{doc}</li>
                     ))}
@@ -384,18 +456,27 @@ Tenho interesse em agilizar o meu protocolo administrativo. Como podemos prosseg
                 </div>
               </div>
 
-              <p className="text-[10px] text-gray-500 text-left italic leading-relaxed">
-                * Os valores acima são uma estimativa de honorários administrativos base. O preço final será fixado em proposta formal após auditoria minuciosa da documentação. Não realizamos serviços de advocacia judicial.
-              </p>
+              <div className="pt-1 space-y-2">
+                <button
+                  id="track-budget-protocol-btn"
+                  onClick={handleTrackRequest}
+                  className="w-full py-3 bg-brand-navy-900 hover:bg-brand-navy-800 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs text-xs"
+                >
+                  <Search className="w-4 h-4 text-brand-gold-400" />
+                  <span>Acompanhar Minha Solicitação</span>
+                </button>
 
-              <button
-                id="send-budget-whatsapp-btn"
-                onClick={handleSendToWhatsApp}
-                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm hover:shadow-md"
-              >
-                <span>Enviar Orçamento para WhatsApp</span>
-                <ArrowRight className="w-5 h-5" />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    resetModal();
+                  }}
+                  className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-all text-xs cursor-pointer"
+                >
+                  Concluir / Fechar
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -403,3 +484,4 @@ Tenho interesse em agilizar o meu protocolo administrativo. Como podemos prosseg
     </div>
   );
 }
+

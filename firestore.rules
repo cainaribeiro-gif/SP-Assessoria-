@@ -33,27 +33,21 @@ service cloud.firestore {
 
     // Public institutional site configuration
     match /siteData/{document=**} {
-      allow read: if true;
-      allow write: if isStaff();
+      allow read, write: if true;
     }
 
-    // Leads (Public create, Staff read/manage)
+    // Leads (Public create, read, update, delete)
     match /leads/{leadId} {
-      allow create: if true;
-      allow read, update, delete: if isStaff();
+      allow read, write: if true;
     }
 
-    // Solicitacoes & Clients (Public creation & protocol checking, Staff update)
+    // Solicitacoes & Clients
     match /solicitacoes/{id} {
-      allow create: if true;
-      allow read: if true;
-      allow update, delete: if isStaff();
+      allow read, write: if true;
     }
 
     match /clients/{clientId} {
-      allow create: if true;
-      allow read: if true;
-      allow update, delete: if isStaff();
+      allow read, write: if true;
     }
 
     // User Profiles

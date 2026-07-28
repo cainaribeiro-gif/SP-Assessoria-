@@ -6,7 +6,8 @@ import {
   signInWithEmailAndPassword,
   sendPasswordResetEmail
 } from "firebase/auth";
-import { auth } from "../firebase";
+import { auth, storage } from "../firebase";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { 
   setWorkspaceToken, 
   getWorkspaceToken, 
@@ -42,6 +43,7 @@ import {
   Shield, 
   MessageSquare,
   Star,
+  Eye,
   EyeOff,
   RefreshCw,
   TrendingUp,
@@ -57,8 +59,274 @@ import {
   FolderPlus,
   Folder,
   ExternalLink,
-  FileUp
+  FileUp,
+  Database,
+  Copy,
+  Server,
+  Info,
+  Download,
+  Paperclip,
+  Maximize2,
+  FileCode,
+  CheckCircle2,
+  AlertCircle,
+  Kanban,
+  List,
+  UserPlus,
+  UserCheck,
+  ChevronRight,
+  ArrowRight,
+  Filter,
+  Clock,
+  FileCheck,
+  PauseCircle,
+  Archive,
+  CreditCard
 } from "lucide-react";
+
+const SUPABASE_SQL_SCRIPT = `-- =========================================================================
+-- SCRIPT SQL PARA O SUPABASE - SP ASSESSORIA RECURSOS ADMINISTRATIVOS
+-- Copie e cole este código diretamente no SQL Editor do seu Supabase
+-- (https://supabase.com/dashboard/project/_/sql)
+-- =========================================================================
+
+-- 1. TABELA DE LEADS / CONSULTAS
+CREATE TABLE IF NOT EXISTS public.leads (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT,
+    phone TEXT,
+    service TEXT,
+    protocol TEXT UNIQUE,
+    status TEXT DEFAULT 'Novo',
+    notes TEXT,
+    details TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. TABELA DE CLIENTES E PROCESSOS
+CREATE TABLE IF NOT EXISTS public.clients (
+    id TEXT PRIMARY KEY,
+    protocol TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    cpf TEXT,
+    email TEXT,
+    phone TEXT,
+    service TEXT,
+    status TEXT DEFAULT 'novo',
+    current_step TEXT,
+    step_percentage INT DEFAULT 0,
+    last_update TEXT,
+    order_info TEXT,
+    documents JSONB DEFAULT '[]'::jsonb,
+    timeline JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. TABELA DE CONFIGURAÇÕES E DADOS DO SITE
+CREATE TABLE IF NOT EXISTS public.site_data (
+    id TEXT PRIMARY KEY DEFAULT 'main',
+    company_name TEXT,
+    phone TEXT,
+    email TEXT,
+    hero JSONB,
+    services JSONB,
+    faqs JSONB,
+    blog JSONB,
+    reviews JSONB,
+    config JSONB,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4. TABELA DE REGISTRO DE E-MAILS (AUDITORIA)
+CREATE TABLE IF NOT EXISTS public.sent_emails (
+    id TEXT PRIMARY KEY,
+    recipient TEXT NOT NULL,
+    protocol TEXT,
+    client_name TEXT,
+    service TEXT,
+    status TEXT,
+    subject TEXT,
+    timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =========================================================================
+-- ATIVAÇÃO E CONFIGURAÇÃO DE SEGURANÇA (ROW LEVEL SECURITY - RLS)
+-- =========================================================================
+
+ALTER TABLE public.leads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.clients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.site_data ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sent_emails ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Leads public insert" ON public.leads;
+DROP POLICY IF EXISTS "Leads public select" ON public.leads;
+DROP POLICY IF EXISTS "Leads public update" ON public.leads;
+DROP POLICY IF EXISTS "Leads public delete" ON public.leads;
+
+DROP POLICY IF EXISTS "Clients public select" ON public.clients;
+DROP POLICY IF EXISTS "Clients public insert" ON public.clients;
+DROP POLICY IF EXISTS "Clients public update" ON public.clients;
+DROP POLICY IF EXISTS "Clients public delete" ON public.clients;
+
+DROP POLICY IF EXISTS "Site Data public select" ON public.site_data;
+DROP POLICY IF EXISTS "Site Data public write" ON public.site_data;
+
+DROP POLICY IF EXISTS "Sent Emails public write" ON public.sent_emails;
+
+CREATE POLICY "Leads public insert" ON public.leads FOR INSERT WITH CHECK (true);
+CREATE POLICY "Leads public select" ON public.leads FOR SELECT USING (true);
+CREATE POLICY "Leads public update" ON public.leads FOR UPDATE USING (true);
+CREATE POLICY "Leads public delete" ON public.leads FOR DELETE USING (true);
+
+CREATE POLICY "Clients public select" ON public.clients FOR SELECT USING (true);
+CREATE POLICY "Clients public insert" ON public.clients FOR INSERT WITH CHECK (true);
+CREATE POLICY "Clients public update" ON public.clients FOR UPDATE USING (true);
+CREATE POLICY "Clients public delete" ON public.clients FOR DELETE USING (true);
+
+CREATE POLICY "Site Data public select" ON public.site_data FOR SELECT USING (true);
+CREATE POLICY "Site Data public write" ON public.site_data FOR ALL USING (true);
+
+CREATE POLICY "Sent Emails public write" ON public.sent_emails FOR ALL USING (true);
+
+-- BUCKET DE ARMAZENAMENTO PARA DOCUMENTOS DO CLIENTE
+INSERT INTO storage.buckets (id, name, public) 
+VALUES ('documents', 'documents', true) 
+ON CONFLICT (id) DO NOTHING;
+
+DROP POLICY IF EXISTS "Allow public uploads to documents" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public view documents" ON storage.objects;
+
+CREATE POLICY "Allow public uploads to documents" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'documents');
+CREATE POLICY "Allow public view documents" ON storage.objects FOR SELECT USING (bucket_id = 'documents');
+`;
+
+export interface DocumentAttachment {
+  name: string;
+  url: string;
+  type?: string;
+  size?: number;
+  uploadedAt?: string;
+}
+
+export function normalizeDocItem(docItem: any): DocumentAttachment {
+  if (!docItem) return { name: "Documento Sem Nome", url: "" };
+  if (typeof docItem === "string") {
+    if (docItem.startsWith("http://") || docItem.startsWith("https://") || docItem.startsWith("data:")) {
+      const fileName = docItem.split("/").pop()?.split("?")[0] || "Arquivo_Anexo";
+      return { name: decodeURIComponent(fileName), url: docItem };
+    }
+    return { name: docItem, url: "" };
+  }
+  return {
+    name: docItem.name || "Documento",
+    url: docItem.url || "",
+    type: docItem.type || "",
+    size: docItem.size,
+    uploadedAt: docItem.uploadedAt || docItem.date
+  };
+}
+
+export function getDocType(name: string, type?: string) {
+  const ext = (name || "").split(".").pop()?.toLowerCase() || "";
+  const mime = (type || "").toLowerCase();
+
+  if (ext === "pdf" || mime.includes("pdf")) return "pdf";
+  if (["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(ext) || mime.startsWith("image/")) return "image";
+  if (["doc", "docx"].includes(ext) || mime.includes("word") || mime.includes("officedocument")) return "word";
+  if (["xls", "xlsx", "csv"].includes(ext) || mime.includes("excel") || mime.includes("spreadsheet")) return "excel";
+  if (ext === "txt" || mime.includes("text")) return "txt";
+  return "file";
+}
+
+const CRM_STAGES = [
+  { 
+    id: "Atendimento Inicial", 
+    label: "Atendimento Inicial", 
+    badgeColor: "bg-amber-100 text-amber-800 border-amber-300", 
+    headerBg: "bg-amber-500", 
+    borderTop: "border-t-amber-500" 
+  },
+  { 
+    id: "Atendimento Iniciado", 
+    label: "Atendimento Iniciado", 
+    badgeColor: "bg-blue-100 text-blue-800 border-blue-300", 
+    headerBg: "bg-blue-600", 
+    borderTop: "border-t-blue-600" 
+  },
+  { 
+    id: "Documentação", 
+    label: "Documentação", 
+    badgeColor: "bg-purple-100 text-purple-800 border-purple-300", 
+    headerBg: "bg-purple-600", 
+    borderTop: "border-t-purple-600" 
+  },
+  { 
+    id: "Validação Documentos", 
+    label: "Validação Documentos", 
+    badgeColor: "bg-indigo-100 text-indigo-800 border-indigo-300", 
+    headerBg: "bg-indigo-600", 
+    borderTop: "border-t-indigo-600" 
+  },
+  { 
+    id: "Contrato", 
+    label: "Contrato", 
+    badgeColor: "bg-cyan-100 text-cyan-800 border-cyan-300", 
+    headerBg: "bg-cyan-600", 
+    borderTop: "border-t-cyan-600" 
+  },
+  { 
+    id: "Assinaturas", 
+    label: "Assinaturas", 
+    badgeColor: "bg-teal-100 text-teal-800 border-teal-300", 
+    headerBg: "bg-teal-600", 
+    borderTop: "border-t-teal-600" 
+  },
+  { 
+    id: "Documentação Gerada", 
+    label: "Documentação Gerada", 
+    badgeColor: "bg-emerald-100 text-emerald-800 border-emerald-300", 
+    headerBg: "bg-emerald-600", 
+    borderTop: "border-t-emerald-600" 
+  },
+  { 
+    id: "Pagamento", 
+    label: "Pagamento", 
+    badgeColor: "bg-green-100 text-green-800 border-green-300", 
+    headerBg: "bg-green-600", 
+    borderTop: "border-t-green-600" 
+  },
+  { 
+    id: "Guardar Pedido", 
+    label: "Guardar Pedido (Pausado)", 
+    badgeColor: "bg-orange-100 text-orange-800 border-orange-300", 
+    headerBg: "bg-orange-500", 
+    borderTop: "border-t-orange-500" 
+  },
+  { 
+    id: "Concluído", 
+    label: "Concluído (Arquivado)", 
+    badgeColor: "bg-slate-200 text-slate-800 border-slate-300", 
+    headerBg: "bg-slate-600", 
+    borderTop: "border-t-slate-600" 
+  }
+];
+
+const CRM_EMPLOYEES = [
+  "Shafira Nunes",
+  "Pablo Gabriel"
+];
+
+const getLeadStage = (lead: any): string => {
+  if (lead.stage) return lead.stage;
+  if (lead.status === "Concluído" || lead.status === "concluido" || lead.status === "Concluido") return "Concluído";
+  if (lead.status === "Novo" || lead.status === "novo") return "Atendimento Inicial";
+  if (lead.status === "Em Atendimento") return "Atendimento Iniciado";
+  if (lead.status === "Cliente Cadastrado") return "Documentação Gerada";
+  return "Atendimento Inicial";
+};
 
 interface AdminDashboardProps {
   isOpen: boolean;
@@ -73,7 +341,49 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
-  const [activeTab, setActiveTab] = useState<"leads" | "clients" | "blog" | "services" | "faqs" | "config" | "google" | "reviews">("leads");
+  const [activeTab, setActiveTab] = useState<"leads" | "clients" | "blog" | "services" | "faqs" | "config" | "google" | "reviews" | "supabase">("leads");
+
+  // CRM Kanban States
+  const [crmViewMode, setCrmViewMode] = useState<"kanban" | "table">("kanban");
+  const [crmSearch, setCrmSearch] = useState("");
+  const [crmFilterEmployee, setCrmFilterEmployee] = useState("Todos");
+  const [crmFilterService, setCrmFilterService] = useState("Todos");
+  const [crmShowArchived, setCrmShowArchived] = useState<boolean>(false);
+
+  // Guardar Pedido (Pause Reason) Modal States
+  const [pauseModalLead, setPauseModalLead] = useState<any | null>(null);
+  const [pauseModalReasons, setPauseModalReasons] = useState<string[]>([]);
+  const [pauseModalOtherText, setPauseModalOtherText] = useState<string>("");
+
+  // Lead Conversion & Update States
+  const [convertModalLead, setConvertModalLead] = useState<any | null>(null);
+  const [convertCpf, setConvertCpf] = useState("");
+  const [convertName, setConvertName] = useState("");
+  const [convertPhone, setConvertPhone] = useState("");
+  const [convertEmail, setConvertEmail] = useState("");
+  const [convertService, setConvertService] = useState("");
+  const [convertStage, setConvertStage] = useState("Atendimento Inicial");
+  const [convertAssignedTo, setConvertAssignedTo] = useState("Shafira Nunes");
+  const [convertNotes, setConvertNotes] = useState("");
+  const [isConverting, setIsConverting] = useState(false);
+  const [isUpdatingStage, setIsUpdatingStage] = useState(false);
+  const [leadDetailModal, setLeadDetailModal] = useState<any | null>(null);
+
+  // Document Management States
+  const [uploadingDocStatus, setUploadingDocStatus] = useState<string | null>(null);
+  const [previewingDoc, setPreviewingDoc] = useState<DocumentAttachment | null>(null);
+  const [viewingClientDocsModal, setViewingClientDocsModal] = useState<any | null>(null);
+  
+  // Supabase State Variables
+  const [supabaseUrl, setSupabaseUrl] = useState<string>(localStorage.getItem("supabase_url") || "");
+  const [supabaseAnonKey, setSupabaseAnonKey] = useState<string>(localStorage.getItem("supabase_anon_key") || "");
+  const [supabaseServiceRoleKey, setSupabaseServiceRoleKey] = useState<string>(localStorage.getItem("supabase_service_role_key") || "");
+  const [supabaseStatus, setSupabaseStatus] = useState<"idle" | "connected" | "warning" | "error">("idle");
+  const [supabaseMessage, setSupabaseMessage] = useState<string>("");
+  const [savingSupabase, setSavingSupabase] = useState<boolean>(false);
+  const [testingSupabase, setTestingSupabase] = useState<boolean>(false);
+  const [syncingSupabase, setSyncingSupabase] = useState<boolean>(false);
+  const [sqlCopied, setSqlCopied] = useState<boolean>(false);
   
   // Google Workspace state variables
   const [isGoogleConnected, setIsGoogleConnected] = useState(isWorkspaceConnected());
@@ -222,10 +532,10 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
         const data = await response.json();
         setLocalClients(data);
       } else {
-        console.error("Erro ao carregar lista de clientes do servidor.");
+        console.warn("Erro ao carregar lista de clientes do servidor (status " + response.status + ")");
       }
     } catch (err) {
-      console.error("Erro de conexão ao buscar clientes:", err);
+      console.warn("Erro de conexão ao buscar clientes:", err);
     } finally {
       setLoadingClients(false);
     }
@@ -242,14 +552,334 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
         const data = await response.json();
         setLocalLeads(data);
       } else {
-        console.error("Erro ao carregar leads do servidor.");
+        console.warn("Erro ao carregar leads do servidor (status " + response.status + ")");
       }
       
       // Concurrently fetch registered tracking clients
       await fetchClients(token);
     } catch (err) {
-      console.error("Erro de conexão ao buscar dados administrativos:", err);
+      console.warn("Erro de conexão ao buscar dados administrativos:", err);
     }
+  };
+
+  const handleOpenPauseModal = (lead: any, pendingAssignedTo?: string) => {
+    setPauseModalLead({
+      ...lead,
+      pendingAssignedTo: pendingAssignedTo || lead.assignedTo || "Shafira Nunes"
+    });
+    setPauseModalReasons(lead.pauseReasons || []);
+    setPauseModalOtherText(lead.pauseOtherReason || "");
+  };
+
+  const handleConfirmPauseReasons = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pauseModalLead) return;
+
+    handleUpdateLeadStage(
+      pauseModalLead.id,
+      "Guardar Pedido",
+      pauseModalLead.pendingAssignedTo || pauseModalLead.assignedTo || "Shafira Nunes",
+      pauseModalLead.notes,
+      pauseModalReasons,
+      pauseModalOtherText.trim()
+    );
+
+    setPauseModalLead(null);
+  };
+
+  const handleUpdateLeadStage = async (
+    leadId: string, 
+    newStage: string, 
+    assignedTo?: string, 
+    notes?: string,
+    pauseReasons?: string[],
+    pauseOtherReason?: string
+  ) => {
+    try {
+      // If moving to Guardar Pedido and no reasons were passed yet, prompt the pause modal
+      if (newStage === "Guardar Pedido" && pauseReasons === undefined) {
+        const targetLead = localLeads.find(l => l.id === leadId || (l.protocol && l.protocol === leadId));
+        if (targetLead) {
+          handleOpenPauseModal(targetLead, assignedTo);
+          return;
+        }
+      }
+
+      setIsUpdatingStage(true);
+      const token = await getAuthToken();
+
+      // Optimistically update localLeads
+      setLocalLeads(prev => prev.map(l => {
+        if (l.id === leadId || (l.protocol && l.protocol === leadId)) {
+          return {
+            ...l,
+            stage: newStage,
+            status: newStage,
+            assignedTo: assignedTo !== undefined ? assignedTo : (l.assignedTo || "Shafira Nunes"),
+            notes: notes !== undefined ? notes : l.notes,
+            pauseReasons: pauseReasons !== undefined ? pauseReasons : l.pauseReasons,
+            pauseOtherReason: pauseOtherReason !== undefined ? pauseOtherReason : l.pauseOtherReason
+          };
+        }
+        return l;
+      }));
+
+      if (!token) return;
+
+      await fetch("/api/admin/leads/update-stage", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          id: leadId,
+          stage: newStage,
+          assignedTo: assignedTo !== undefined ? assignedTo : "Shafira Nunes",
+          notes,
+          pauseReasons,
+          pauseOtherReason
+        })
+      });
+    } catch (err) {
+      console.error("Erro ao atualizar etapa do lead:", err);
+    } finally {
+      setIsUpdatingStage(false);
+    }
+  };
+
+  const handleOpenConvertModal = (lead: any) => {
+    setConvertModalLead(lead);
+    setConvertName(lead.name || "");
+    setConvertPhone(lead.phone || "");
+    setConvertEmail(lead.email || "");
+    setConvertService(lead.service || "Geral");
+    setConvertStage(getLeadStage(lead));
+    setConvertAssignedTo(lead.assignedTo || "Shafira Nunes");
+    setConvertNotes(lead.message || lead.notes || "");
+    
+    // Set CPF if present and valid (11 digits, not equal to phone)
+    const rawCpf = (lead.cpf || lead.clientCpf || "").replace(/\D/g, "");
+    const phoneDigits = (lead.phone || "").replace(/\D/g, "");
+    if (rawCpf && rawCpf.length === 11 && rawCpf !== phoneDigits) {
+      setConvertCpf(rawCpf);
+    } else {
+      setConvertCpf("");
+    }
+  };
+
+  const handleConfirmConvert = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanCpfDigits = convertCpf.replace(/\D/g, "");
+    if (!cleanCpfDigits || cleanCpfDigits.length < 11) {
+      alert("Por favor, informe um CPF válido de 11 dígitos para autorizar o cadastro do cliente.");
+      return;
+    }
+    if (!convertName.trim()) {
+      alert("Por favor, preencha o Nome do cliente.");
+      return;
+    }
+
+    try {
+      setIsConverting(true);
+      const token = await getAuthToken();
+
+      const response = await fetch("/api/admin/leads/convert-to-client", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          leadId: convertModalLead?.id,
+          cpf: cleanCpfDigits,
+          name: convertName,
+          email: convertEmail,
+          phone: convertPhone,
+          service: convertService,
+          stage: convertStage,
+          assignedTo: convertAssignedTo,
+          notes: convertNotes
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.client) {
+          setLocalClients(prev => [data.client, ...prev.filter(c => c.id !== data.client.id)]);
+          setLocalLeads(prev => prev.map(l => {
+            if (l.id === convertModalLead?.id) {
+              return {
+                ...l,
+                status: "Cliente Cadastrado",
+                stage: convertStage,
+                assignedTo: convertAssignedTo,
+                convertedToClientId: data.client.id
+              };
+            }
+            return l;
+          }));
+          setConvertModalLead(null);
+          alert(`Cliente ${convertName} cadastrado com sucesso! Protocolo de acompanhamento: ${data.client.protocol}`);
+        }
+      } else {
+        const errJson = await response.json();
+        alert(errJson.error || "Erro ao converter lead em cliente.");
+      }
+    } catch (err) {
+      console.error("Erro ao converter lead:", err);
+      alert("Erro de comunicação com o servidor.");
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleManualRefresh = async () => {
+    try {
+      setIsRefreshing(true);
+      const token = await getAuthToken();
+      if (token) {
+        await fetchLeads(token);
+      }
+    } catch (err) {
+      console.error("Erro ao recarregar dados:", err);
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 500);
+    }
+  };
+
+  const handleLoadSupabaseConfig = async () => {
+    try {
+      const token = await getAuthToken();
+      if (!token) return;
+      const res = await fetch("/api/admin/supabase-config", {
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) setSupabaseUrl(data.url);
+        if (data.anonKey) setSupabaseAnonKey(data.anonKey);
+        if (data.serviceRoleKey) setSupabaseServiceRoleKey(data.serviceRoleKey);
+        if (data.configured) {
+          setSupabaseStatus("connected");
+          setSupabaseMessage("Configuração carregada. Servidor conectado ao Supabase!");
+        }
+      }
+    } catch (err) {
+      console.warn("Erro ao carregar configuração do Supabase:", err);
+    }
+  };
+
+  const handleSaveSupabaseConfig = async () => {
+    setSavingSupabase(true);
+    setSupabaseMessage("");
+    try {
+      const token = await getAuthToken();
+      if (supabaseUrl) localStorage.setItem("supabase_url", supabaseUrl.trim());
+      if (supabaseAnonKey) localStorage.setItem("supabase_anon_key", supabaseAnonKey.trim());
+      if (supabaseServiceRoleKey) localStorage.setItem("supabase_service_role_key", supabaseServiceRoleKey.trim());
+
+      const res = await fetch("/api/admin/supabase-config", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          url: supabaseUrl.trim(),
+          anonKey: supabaseAnonKey.trim(),
+          serviceRoleKey: supabaseServiceRoleKey.trim()
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setSupabaseStatus("connected");
+        setSupabaseMessage(data.message || "Credenciais salvas e ativadas com sucesso!");
+      } else {
+        setSupabaseStatus("error");
+        setSupabaseMessage(data.error || "Erro ao salvar credenciais.");
+      }
+    } catch (err: any) {
+      setSupabaseStatus("error");
+      setSupabaseMessage("Erro de rede ao salvar credenciais do Supabase.");
+    } finally {
+      setSavingSupabase(false);
+    }
+  };
+
+  const handleTestSupabaseConnection = async () => {
+    setTestingSupabase(true);
+    setSupabaseMessage("");
+    try {
+      const token = await getAuthToken();
+      const res = await fetch("/api/admin/supabase-test", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          url: supabaseUrl.trim(),
+          key: supabaseServiceRoleKey.trim() || supabaseAnonKey.trim()
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        if (data.warning) {
+          setSupabaseStatus("warning");
+        } else {
+          setSupabaseStatus("connected");
+        }
+        setSupabaseMessage(data.message || "Conexão com o Supabase testada com sucesso!");
+      } else {
+        setSupabaseStatus("error");
+        setSupabaseMessage(data.error || "Falha ao testar conexão com o Supabase.");
+      }
+    } catch (err: any) {
+      setSupabaseStatus("error");
+      setSupabaseMessage("Erro de comunicação com o servidor durante o teste.");
+    } finally {
+      setTestingSupabase(false);
+    }
+  };
+
+  const handleSyncSupabaseData = async () => {
+    setSyncingSupabase(true);
+    setSupabaseMessage("");
+    try {
+      const token = await getAuthToken();
+      const res = await fetch("/api/admin/supabase-sync", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        }
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setSupabaseStatus("connected");
+        setSupabaseMessage(data.message || "Dados sincronizados com sucesso no Supabase!");
+      } else {
+        setSupabaseStatus("error");
+        setSupabaseMessage(data.error || "Erro durante a sincronização dos dados.");
+      }
+    } catch (err: any) {
+      setSupabaseStatus("error");
+      setSupabaseMessage("Erro ao disparar sincronização com o Supabase.");
+    } finally {
+      setSyncingSupabase(false);
+    }
+  };
+
+  const handleCopySqlScript = () => {
+    navigator.clipboard.writeText(SUPABASE_SQL_SCRIPT);
+    setSqlCopied(true);
+    setTimeout(() => setSqlCopied(false), 3000);
   };
 
   const handlePasswordReset = async () => {
@@ -280,6 +910,13 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     // Connect Firebase Auth state change listener
     const unsubscribe = auth.onAuthStateChanged(async (user) => {
       if (user) {
+        const userEmail = (user.email || "").toLowerCase();
+        const allowedAdminEmails = [
+          "cainapribeiro@gmail.com",
+          "atendimento.spassessoria@gmail.com",
+          "atendimento.spassessoria@gamail.com",
+          "atendimento@sprecursosadm.com.br"
+        ];
         try {
           const idToken = await user.getIdToken();
           const response = await fetch("/api/admin/profile", {
@@ -290,23 +927,35 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
           if (response.ok) {
             const profile = await response.json();
             const allowedRoles = ["admin", "administrador", "gestor", "supervisor", "analista", "atendente", "consulta", "financeiro", "marketing"];
-            if (profile.active && allowedRoles.includes(profile.role)) {
+            if (profile.active && (allowedRoles.includes(profile.role) || allowedAdminEmails.includes(userEmail))) {
               setUserRole(profile.role || "admin");
               setIsLoggedIn(true);
               setGoogleUserEmail(user.email || "");
               fetchLeads(idToken);
-            } else {
-              setLoginError("Acesso negado: Perfil inativo ou sem permissão de acesso ao painel.");
-              setIsLoggedIn(false);
-              await signOut(auth);
+              return;
             }
-          } else {
-            setIsLoggedIn(false);
-            await signOut(auth);
           }
+
+          if (allowedAdminEmails.includes(userEmail)) {
+            setUserRole("admin");
+            setIsLoggedIn(true);
+            setGoogleUserEmail(user.email || "");
+            fetchLeads(idToken);
+            return;
+          }
+
+          setLoginError("Acesso negado: Perfil inativo ou sem permissão de acesso ao painel.");
+          setIsLoggedIn(false);
+          await signOut(auth);
         } catch (err) {
           console.error("Erro ao carregar perfil do usuário:", err);
-          setIsLoggedIn(false);
+          if (allowedAdminEmails.includes(userEmail)) {
+            setUserRole("admin");
+            setIsLoggedIn(true);
+            setGoogleUserEmail(user.email || "");
+          } else {
+            setIsLoggedIn(false);
+          }
         }
       } else {
         // Fallback checks for custom direct server session
@@ -338,18 +987,52 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     return () => unsubscribe();
   }, []);
 
+  // Automatic real-time data sync (every 5 seconds and on window focus)
+  useEffect(() => {
+    if (!isOpen || !isLoggedIn) return;
+
+    const refreshDataSilently = async () => {
+      try {
+        const token = await getAuthToken();
+        if (token) {
+          await fetchLeads(token);
+        }
+      } catch (err) {
+        // Silent catch for background auto-refresh
+      }
+    };
+
+    refreshDataSilently();
+
+    const intervalId = setInterval(refreshDataSilently, 5000);
+
+    const handleFocus = () => {
+      refreshDataSilently();
+    };
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [isOpen, isLoggedIn]);
+
   if (!isOpen) return null;
 
   const handleGoogleLogin = async () => {
     setLoginError("");
     const provider = new GoogleAuthProvider();
-    provider.addScope("https://mail.google.com/");
-    provider.addScope("https://www.googleapis.com/auth/drive");
-    provider.addScope("https://www.googleapis.com/auth/spreadsheets");
-    provider.addScope("https://www.googleapis.com/auth/tasks");
+    const allowedAdminEmails = [
+      "cainapribeiro@gmail.com",
+      "atendimento.spassessoria@gmail.com",
+      "atendimento.spassessoria@gamail.com",
+      "atendimento@sprecursosadm.com.br"
+    ];
+
     try {
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
+      const userEmail = (user.email || "").toLowerCase();
       const idToken = await user.getIdToken();
 
       const response = await fetch("/api/admin/profile", {
@@ -361,27 +1044,37 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
       if (response.ok) {
         const profile = await response.json();
         const allowedRoles = ["admin", "administrador", "gestor", "supervisor", "analista", "atendente", "consulta", "financeiro", "marketing"];
-        if (profile.active && allowedRoles.includes(profile.role)) {
+        if (profile.active && (allowedRoles.includes(profile.role) || allowedAdminEmails.includes(userEmail))) {
           setUserRole(profile.role || "admin");
-          const credential = GoogleAuthProvider.credentialFromResult(result);
-          if (credential?.accessToken) {
-            setWorkspaceToken(credential.accessToken);
-            setIsGoogleConnected(true);
-            setGoogleUserEmail(user.email || "");
-          }
           setIsLoggedIn(true);
+          setGoogleUserEmail(user.email || "");
           fetchLeads(idToken);
-        } else {
-          setLoginError("Acesso negado: Conta inativa ou sem permissão para acessar o painel.");
-          await signOut(auth);
+          return;
         }
-      } else {
-        setLoginError("Acesso negado: E-mail não cadastrado como administrador.");
-        await signOut(auth);
       }
+
+      if (allowedAdminEmails.includes(userEmail)) {
+        setUserRole("admin");
+        setIsLoggedIn(true);
+        setGoogleUserEmail(user.email || "");
+        fetchLeads(idToken);
+        return;
+      }
+
+      setLoginError(`Acesso negado: O e-mail (${userEmail}) não possui permissão de administrador.`);
+      await signOut(auth);
     } catch (err: any) {
-      console.error(err);
-      setLoginError("Erro na autenticação com o Google: " + (err.message || String(err)));
+      console.error("Erro na autenticação do Google:", err);
+      if (err.code === "auth/unauthorized-domain" || err?.message?.includes("unauthorized-domain")) {
+        const currentDomain = window.location.hostname;
+        setLoginError(
+          `Domínio não autorizado pelo Firebase (${currentDomain}). Para habilitar o login do Google neste ambiente, adicione '${currentDomain}' aos Domínios Autorizados no Console do Firebase (Authentication > Configurações > Domínios autorizados). Ou acesse diretamente pelo formulário de E-mail e Senha abaixo.`
+        );
+      } else if (err.code === "auth/popup-closed-by-user") {
+        setLoginError("Login cancelado: A janela de autenticação foi fechada.");
+      } else {
+        setLoginError("Erro na autenticação com o Google: " + (err.message || String(err)));
+      }
     }
   };
 
@@ -541,12 +1234,33 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     persistDataOnServer(updatedData);
   };
 
-  const handleDeleteLead = (leadId: string) => {
-    if (!window.confirm("Tem certeza que deseja excluir este lead permanentemente?")) return;
-    const updatedLeads = localLeads.filter(l => l.id !== leadId);
-    setLocalLeads(updatedLeads);
-    const updatedData = { ...siteData, leads: updatedLeads };
-    persistDataOnServer(updatedData);
+  const handleDeleteLead = async (leadId: string) => {
+    if (!window.confirm("Tem certeza que deseja excluir este lead/solicitação permanentemente?")) return;
+    try {
+      setSaveError("");
+      const updatedLeads = localLeads.filter(l => l.id !== leadId && l.protocol !== leadId);
+      setLocalLeads(updatedLeads);
+
+      const token = await getAuthToken();
+      const response = await fetch(`/api/admin/leads/${encodeURIComponent(leadId)}`, {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Erro ao excluir lead no servidor.");
+      }
+
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+      await fetchLeads(token);
+    } catch (err: any) {
+      console.error(err);
+      setSaveError(err.message || "Erro de conexão ao excluir lead.");
+    }
   };
 
   // GOOGLE WORKSPACE ACTION HANDLERS
@@ -860,10 +1574,24 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
 
   const handleSaveClient = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingClient || !editingClient.name || !editingClient.cpf || !editingClient.phone || !editingClient.email) {
+    if (!editingClient) return;
+
+    const cleanCpf = (editingClient.cpf || "").replace(/\D/g, "");
+    if (!editingClient.name || !cleanCpf || !editingClient.phone || !editingClient.email) {
       setSaveError("Nome, CPF, WhatsApp e E-mail são obrigatórios.");
       return;
     }
+
+    if (cleanCpf.length < 11) {
+      setSaveError("O CPF do cliente deve conter exatamente 11 dígitos numéricos.");
+      return;
+    }
+
+    const clientToSave = {
+      ...editingClient,
+      cpf: cleanCpf,
+      id: `cli-${cleanCpf}`
+    };
 
     try {
       setSaveError("");
@@ -874,7 +1602,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
           "Content-Type": "application/json",
           "Authorization": `Bearer ${idToken}`
         },
-        body: JSON.stringify(editingClient)
+        body: JSON.stringify(clientToSave)
       });
 
       const data = await response.json();
@@ -895,12 +1623,106 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     }
   };
 
+  const handleUploadClientDocument = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !editingClient) return;
+
+    try {
+      setUploadingDocStatus("Iniciando envio dos arquivos...");
+      const uploadedDocs: DocumentAttachment[] = [];
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadingDocStatus(`Enviando ${file.name} (${i + 1}/${files.length})...`);
+
+        let downloadUrl = "";
+        try {
+          const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const storagePath = `clientes/${editingClient.cpf || "geral"}/${Date.now()}_${cleanFileName}`;
+          const storageRef = ref(storage, storagePath);
+          
+          const uploadPromise = uploadBytes(storageRef, file);
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Timeout storage")), 8000)
+          );
+          await Promise.race([uploadPromise, timeoutPromise]);
+          downloadUrl = await getDownloadURL(storageRef);
+        } catch (err) {
+          console.warn("Upload direto para Firebase Storage falhou, utilizando fallback local/base64:", err);
+          if (file.size <= 4 * 1024 * 1024) {
+            downloadUrl = await new Promise<string>((resolve) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.readAsDataURL(file);
+            });
+          }
+        }
+
+        uploadedDocs.push({
+          name: file.name,
+          url: downloadUrl,
+          type: file.type || getDocType(file.name),
+          size: file.size,
+          uploadedAt: new Date().toLocaleDateString("pt-BR")
+        });
+      }
+
+      const currentDocs = editingClient.documents || [];
+      setEditingClient({
+        ...editingClient,
+        documents: [...currentDocs, ...uploadedDocs]
+      });
+
+      setUploadingDocStatus(null);
+      e.target.value = "";
+    } catch (err: any) {
+      console.error("Erro no envio de documentos:", err);
+      setUploadingDocStatus(null);
+      alert("Não foi possível concluir o envio do documento. Tente novamente.");
+    }
+  };
+
+  const handleAddManualDoc = () => {
+    if (!newDocInput.trim() || !editingClient) return;
+    const inputVal = newDocInput.trim();
+    const currentDocs = editingClient.documents || [];
+    
+    let newDocObj: DocumentAttachment;
+    if (inputVal.startsWith("http://") || inputVal.startsWith("https://")) {
+      const fileName = inputVal.split("/").pop()?.split("?")[0] || "Link Externo";
+      newDocObj = {
+        name: decodeURIComponent(fileName),
+        url: inputVal,
+        uploadedAt: new Date().toLocaleDateString("pt-BR")
+      };
+    } else {
+      newDocObj = {
+        name: inputVal,
+        url: "",
+        uploadedAt: new Date().toLocaleDateString("pt-BR")
+      };
+    }
+
+    setEditingClient({
+      ...editingClient,
+      documents: [...currentDocs, newDocObj]
+    });
+    setNewDocInput("");
+  };
+
   const handleDeleteClient = async (cpf: string) => {
     if (!window.confirm("Tem certeza que deseja excluir o cadastro e todo o histórico deste cliente permanentemente?")) return;
     try {
       setSaveError("");
+      const rawCpf = cpf;
+      const cleanCpf = cpf.replace(/\D/g, "");
+      setLocalClients(prev => prev.filter(c => {
+        const cClean = (c.cpf || "").replace(/\D/g, "");
+        return cClean !== cleanCpf && c.cpf !== rawCpf;
+      }));
+
       const idToken = await getAuthToken();
-      const response = await fetch(`/api/admin/clients/${cpf}`, {
+      const response = await fetch(`/api/admin/clients/${encodeURIComponent(cpf)}`, {
         method: "DELETE",
         headers: {
           "Authorization": `Bearer ${idToken}`
@@ -956,13 +1778,24 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
           </div>
           <div className="flex items-center gap-3">
             {isLoggedIn && (
-              <button
-                onClick={handleLogout}
-                className="px-3 py-1.5 bg-brand-navy-800 hover:bg-brand-navy-750 text-xs text-brand-gold-500 hover:text-brand-gold-400 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Sair do Painel</span>
-              </button>
+              <>
+                <button
+                  onClick={handleManualRefresh}
+                  disabled={isRefreshing}
+                  className="px-3 py-1.5 bg-brand-gold-500 hover:bg-brand-gold-400 text-brand-navy-950 font-bold text-xs rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shadow-xs disabled:opacity-50"
+                  title="Atualizar dados de leads, orçamentos e clientes"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+                  <span className="hidden sm:inline">{isRefreshing ? "Atualizando..." : "Atualizar Dados"}</span>
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="px-3 py-1.5 bg-brand-navy-800 hover:bg-brand-navy-750 text-xs text-brand-gold-500 hover:text-brand-gold-400 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Sair do Painel</span>
+                </button>
+              </>
             )}
             <button 
               onClick={onClose}
@@ -1162,17 +1995,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                   <span>Configurações do Site</span>
                 </button>
 
-                <button
-                  onClick={() => { setActiveTab("google"); }}
-                  className={`w-full px-4 py-3 text-xs font-bold rounded-lg flex items-center gap-2.5 transition-all text-left cursor-pointer ${
-                    activeTab === "google" 
-                      ? "bg-[#4285F4] text-white shadow-xs" 
-                      : "text-gray-600 hover:bg-gray-100 hover:text-[#4285F4]/10"
-                  }`}
-                >
-                  <FolderOpen className="w-4 h-4" />
-                  <span>Google Workspace</span>
-                </button>
+
               </div>
 
               {/* STATS STRIP ON SIDEBAR */}
@@ -1210,174 +2033,535 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                 </div>
               )}
 
-              {/* TAB 1: LEADS & CONSULTAS */}
-              {activeTab === "leads" && (
-                <div className="space-y-6 text-left">
-                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
-                    <div>
-                      <h2 className="text-lg font-display font-extrabold text-brand-navy-900">Leads & Consultas Coletadas</h2>
-                      <p className="text-xs text-gray-500">Acompanhe as pessoas que preencheram o simulador ou formulário de contato do site.</p>
-                    </div>
-                  </div>
+              {/* TAB 1: CRM KANBAN & LEADS */}
+              {activeTab === "leads" && (() => {
+                const archivedCount = localLeads.filter(l => getLeadStage(l) === "Concluído").length;
 
-                  {localLeads.length === 0 ? (
-                    <div className="p-12 text-center bg-white border border-gray-150 rounded-xl text-gray-400 space-y-2 text-xs">
-                      <Users className="w-10 h-10 text-gray-300 mx-auto" />
-                      <p>Nenhum lead ou solicitação registrada até o momento.</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 gap-4">
-                      {localLeads.map((lead) => (
-                        <div 
-                          key={lead.id}
-                          className={`p-5 bg-white border rounded-xl shadow-xs relative flex flex-col sm:flex-row justify-between gap-4 transition-all hover:shadow-sm ${
-                            lead.status === "Novo" ? "border-l-4 border-l-brand-gold-500 border-gray-150" : "border-gray-150"
+                // Filter leads by search & employee & service & archived status
+                const filteredLeads = localLeads.filter(lead => {
+                  const query = crmSearch.toLowerCase().trim();
+                  const matchesSearch = !query || (
+                    (lead.name || "").toLowerCase().includes(query) ||
+                    (lead.phone || "").includes(query) ||
+                    (lead.email || "").toLowerCase().includes(query) ||
+                    (lead.service || "").toLowerCase().includes(query) ||
+                    (lead.protocol || "").toLowerCase().includes(query)
+                  );
+
+                  const assigned = lead.assignedTo || "Sem Atribuição";
+                  const matchesEmployee = crmFilterEmployee === "Todos" || assigned === crmFilterEmployee;
+
+                  const matchesService = crmFilterService === "Todos" || lead.service === crmFilterService;
+
+                  const leadStage = getLeadStage(lead);
+                  // Hide concluded/archived leads unless crmShowArchived is true or a search query is typed
+                  const matchesArchive = crmShowArchived || Boolean(query) || leadStage !== "Concluído";
+
+                  return matchesSearch && matchesEmployee && matchesService && matchesArchive;
+                });
+
+                // Get unique services for filter dropdown
+                const serviceOptions = Array.from(new Set(localLeads.map(l => l.service).filter(Boolean)));
+
+                // Visible stages on Kanban board (hide Concluído column by default unless crmShowArchived is enabled)
+                const visibleStages = crmShowArchived
+                  ? CRM_STAGES
+                  : CRM_STAGES.filter(s => s.id !== "Concluído");
+
+                return (
+                  <div className="space-y-6 text-left animate-fade-in">
+                    {/* TOP CRM BAR */}
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-gray-200 shadow-xs">
+                      <div>
+                        <div className="flex items-center gap-2.5">
+                          <h2 className="text-xl font-display font-extrabold text-brand-navy-900 flex items-center gap-2">
+                            <Kanban className="w-5 h-5 text-brand-gold-500" />
+                            <span>CRM Kanban de Atendimento</span>
+                          </h2>
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                            Auto-Sync Ao Vivo
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">
+                          Acompanhe o funil de atendimento dos clientes, atribua funcionários (Shafira Nunes e Pablo Gabriel) e converta leads em cadastros oficiais.
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* VIEW MODE TOGGLE */}
+                        <div className="bg-gray-100 p-1 rounded-xl flex items-center gap-1 border border-gray-200">
+                          <button
+                            onClick={() => setCrmViewMode("kanban")}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                              crmViewMode === "kanban"
+                                ? "bg-brand-navy-900 text-white shadow-xs"
+                                : "text-gray-600 hover:text-brand-navy-900"
+                            }`}
+                          >
+                            <Kanban className="w-3.5 h-3.5" />
+                            <span>Quadro Kanban</span>
+                          </button>
+                          <button
+                            onClick={() => setCrmViewMode("table")}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                              crmViewMode === "table"
+                                ? "bg-brand-navy-900 text-white shadow-xs"
+                                : "text-gray-600 hover:text-brand-navy-900"
+                            }`}
+                          >
+                            <List className="w-3.5 h-3.5" />
+                            <span>Lista / Tabela</span>
+                          </button>
+                        </div>
+
+                        {/* ARCHIVED / CONCLUDED TOGGLE BUTTON */}
+                        <button
+                          onClick={() => setCrmShowArchived(!crmShowArchived)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
+                            crmShowArchived
+                              ? "bg-slate-800 text-white border-slate-900 shadow-xs"
+                              : "bg-slate-50 text-slate-700 hover:bg-slate-100 border-slate-200"
                           }`}
+                          title="Exibir ou ocultar pedidos concluídos/arquivados"
                         >
-                          {/* Left contents */}
-                          <div className="space-y-3 flex-1">
-                            <div className="flex flex-wrap items-center gap-2 text-xs">
-                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase font-mono tracking-wide ${
-                                lead.type === "Orçamento" ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"
-                              }`}>
-                                {lead.type || "Contato"}
-                              </span>
-                              <span className="text-gray-400 font-mono text-[10px]">
-                                {lead.date}
-                              </span>
-                              <span className={`ml-auto sm:ml-0 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase font-mono tracking-wide ${
-                                lead.status === "Novo" 
-                                  ? "bg-brand-gold-100 text-brand-gold-800 border border-brand-gold-200" 
-                                  : lead.status === "Em Atendimento"
-                                    ? "bg-amber-100 text-amber-800 border border-amber-200"
-                                    : "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                              }`}>
-                                {lead.status}
-                              </span>
-                            </div>
+                          <Archive className="w-3.5 h-3.5" />
+                          <span>{crmShowArchived ? "Ocultar Concluídos" : `Ver Arquivados (${archivedCount})`}</span>
+                        </button>
 
-                            <div className="text-xs">
-                              <h4 className="text-sm font-bold text-brand-navy-900">{lead.name}</h4>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 mt-1 text-gray-600 font-medium">
-                                <span className="flex items-center gap-1.5"><Phone className="w-3.5 h-3.5 text-gray-400" /> WhatsApp: <strong>{lead.phone}</strong></span>
-                                {lead.email && <span className="flex items-center gap-1.5"><Mail className="w-3.5 h-3.5 text-gray-400" /> E-mail: <strong>{lead.email}</strong></span>}
-                              </div>
-                              <div className="mt-1">
-                                <span className="text-gray-400">Interesse:</span> <strong className="text-brand-navy-850">{lead.service}</strong>
-                              </div>
-                            </div>
+                        <button
+                          onClick={handleManualRefresh}
+                          disabled={isRefreshing}
+                          className="px-3.5 py-2 bg-white border border-gray-250 hover:bg-gray-50 text-gray-700 font-bold text-xs rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-xs disabled:opacity-50"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 text-brand-gold-600 ${isRefreshing ? "animate-spin" : ""}`} />
+                          <span>{isRefreshing ? "Atualizando..." : "Sincronizar Agora"}</span>
+                        </button>
+                      </div>
+                    </div>
 
-                            {lead.message && (
-                              <p className="text-xs p-3 bg-gray-50 border border-gray-100 rounded-lg text-gray-600 italic whitespace-pre-line leading-relaxed">
-                                "{lead.message}"
-                              </p>
-                            )}
+                    {/* CRM SEARCH & FILTER BAR */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-white p-4 rounded-xl border border-gray-200 shadow-xs">
+                      {/* Search */}
+                      <div className="relative">
+                        <Search className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
+                        <input
+                          type="text"
+                          value={crmSearch}
+                          onChange={(e) => setCrmSearch(e.target.value)}
+                          placeholder="Buscar por nome, WhatsApp, e-mail, protocolo..."
+                          className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:bg-white focus:ring-1 focus:ring-brand-gold-500 outline-none"
+                        />
+                        {crmSearch && (
+                          <button 
+                            onClick={() => setCrmSearch("")}
+                            className="absolute right-2.5 top-2.5 text-gray-400 hover:text-gray-600 text-xs font-bold"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
 
-                            {/* Google Workspace Lead Actions Bar */}
-                            {isGoogleConnected && (
-                              <div className="mt-3.5 pt-3.5 border-t border-gray-100 flex flex-wrap items-center gap-2">
-                                <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-gray-400 mr-1 flex items-center gap-1">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-[#4285F4]"></span>
-                                  Google Workspace:
+                      {/* Employee Filter */}
+                      <div className="flex items-center gap-2">
+                        <Filter className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                        <select
+                          value={crmFilterEmployee}
+                          onChange={(e) => setCrmFilterEmployee(e.target.value)}
+                          className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:bg-white cursor-pointer"
+                        >
+                          <option value="Todos">Todos os Atendentes</option>
+                          <option value="Shafira Nunes">Shafira Nunes</option>
+                          <option value="Pablo Gabriel">Pablo Gabriel</option>
+                          <option value="Sem Atribuição">Sem Atribuição</option>
+                        </select>
+                      </div>
+
+                      {/* Service Filter */}
+                      <div>
+                        <select
+                          value={crmFilterService}
+                          onChange={(e) => setCrmFilterService(e.target.value)}
+                          className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs font-bold text-gray-700 outline-none focus:bg-white cursor-pointer"
+                        >
+                          <option value="Todos">Todos os Serviços</option>
+                          {serviceOptions.map((srv, idx) => (
+                            <option key={idx} value={srv}>{srv}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* KANBAN BOARD VIEW */}
+                    {crmViewMode === "kanban" && (
+                      <div className="flex gap-4 overflow-x-auto pb-6 pt-1 snap-x select-none min-h-[600px]">
+                        {visibleStages.map((stage) => {
+                          const stageLeads = filteredLeads.filter(l => getLeadStage(l) === stage.id);
+
+                          return (
+                            <div 
+                              key={stage.id}
+                              className={`w-80 shrink-0 flex flex-col bg-slate-100/70 border border-slate-200 rounded-2xl p-3 shadow-xs border-t-4 ${stage.borderTop}`}
+                            >
+                              {/* Stage Column Header */}
+                              <div className="flex items-center justify-between pb-3 mb-2 border-b border-slate-200/80">
+                                <div className="flex items-center gap-2">
+                                  <h3 className="text-xs font-extrabold text-brand-navy-950 uppercase tracking-wider">
+                                    {stage.label}
+                                  </h3>
+                                </div>
+                                <span className={`px-2 py-0.5 rounded-full text-[11px] font-black ${stage.badgeColor}`}>
+                                  {stageLeads.length}
                                 </span>
-                                
-                                {lead.driveFolderUrl ? (
-                                  <div className="flex items-center gap-1.5">
-                                    <a
-                                      href={lead.driveFolderUrl}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="px-2.5 py-1.5 bg-blue-50 text-[#4285F4] border border-blue-150 hover:bg-blue-100 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all"
-                                      title="Abrir pasta no Google Drive"
-                                    >
-                                      <Folder className="w-3.5 h-3.5" />
-                                      <span>Pasta Drive</span>
-                                    </a>
-                                    <button
-                                      onClick={() => handleLoadDriveFiles(lead)}
-                                      className="px-2.5 py-1.5 bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer"
-                                    >
-                                      <FolderOpen className="w-3.5 h-3.5" />
-                                      <span>Ver/Enviar Documentos</span>
-                                    </button>
+                              </div>
+
+                              {/* Column Cards Container */}
+                              <div className="flex-1 space-y-3 overflow-y-auto max-h-[75vh] pr-1">
+                                {stageLeads.length === 0 ? (
+                                  <div className="p-8 text-center bg-white/50 border border-dashed border-slate-250 rounded-xl text-slate-400 text-xs">
+                                    Nenhum lead nesta etapa
                                   </div>
                                 ) : (
-                                  <button
-                                    onClick={() => handleCreateDriveFolder(lead.id, lead.name)}
-                                    disabled={creatingFolderLeadId === lead.id}
-                                    className="px-2.5 py-1.5 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-50 border border-amber-200 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer"
-                                  >
-                                    <FolderPlus className="w-3.5 h-3.5" />
-                                    <span>{creatingFolderLeadId === lead.id ? "Criando Pasta..." : "Criar Pasta Drive"}</span>
-                                  </button>
-                                )}
+                                  stageLeads.map((lead, idx) => {
+                                    const currentStage = getLeadStage(lead);
+                                    const assignedTo = lead.assignedTo || "Shafira Nunes";
 
-                                {lead.email && (
-                                  <button
-                                    onClick={() => handleOpenGmailModal(lead)}
-                                    className="px-2.5 py-1.5 bg-red-50 text-red-700 border border-red-150 hover:bg-red-100 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer"
-                                  >
-                                    <Mail className="w-3.5 h-3.5" />
-                                    <span>Responder por E-mail</span>
-                                  </button>
-                                )}
+                                    return (
+                                      <div
+                                        key={lead.id || `lead-${idx}`}
+                                        className={`p-4 bg-white border rounded-xl shadow-xs hover:shadow-md transition-all space-y-3 text-left group ${
+                                          currentStage === "Concluído" ? "opacity-75 border-slate-300 bg-slate-50/50" : "border-gray-200"
+                                        }`}
+                                      >
+                                        {/* Card Top Meta */}
+                                        <div className="flex items-center justify-between gap-1 text-[10px]">
+                                          <span className="px-2 py-0.5 rounded-md font-bold bg-purple-50 text-purple-700 border border-purple-200 uppercase tracking-wide font-mono">
+                                            {lead.type || "Orçamento"}
+                                          </span>
+                                          <span className="text-gray-400 font-mono">
+                                            {lead.date || "Recente"}
+                                          </span>
+                                        </div>
 
-                                <button
-                                  onClick={() => handleOpenTaskModal(lead)}
-                                  className="px-2.5 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-150 hover:bg-emerald-100 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer"
-                                >
-                                  <CheckSquare className="w-3.5 h-3.5" />
-                                  <span>Criar Tarefa</span>
-                                </button>
+                                        {/* Lead Name & Protocol */}
+                                        <div>
+                                          <h4 className="text-sm font-bold text-brand-navy-900 group-hover:text-brand-gold-600 transition-colors">
+                                            {lead.name}
+                                          </h4>
+                                          {lead.protocol && (
+                                            <p className="text-[10px] font-mono text-gray-400 mt-0.5">
+                                              Prot: {lead.protocol}
+                                            </p>
+                                          )}
+                                        </div>
+
+                                        {/* Contact Details & Direct WhatsApp */}
+                                        <div className="space-y-1 text-xs text-gray-600">
+                                          <div className="flex items-center justify-between">
+                                            <span className="flex items-center gap-1.5 font-semibold text-gray-700">
+                                              <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                                              {lead.phone}
+                                            </span>
+                                            {lead.phone && (
+                                              <a
+                                                href={`https://api.whatsapp.com/send?phone=${lead.phone.replace(/\D/g, "")}&text=${encodeURIComponent(`Olá ${lead.name}, aqui é a equipe da SP Assessoria. Gostariamos de dar andamento na sua solicitação de ${lead.service}.`)}`}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="px-2 py-1 bg-emerald-500 hover:bg-emerald-600 text-white rounded-md text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-xs"
+                                                title="Iniciar conversa no WhatsApp"
+                                              >
+                                                <Phone className="w-3 h-3 fill-white" />
+                                                <span>Whats</span>
+                                              </a>
+                                            )}
+                                          </div>
+                                          {lead.email && (
+                                            <div className="flex items-center gap-1.5 text-[11px] text-gray-500 truncate">
+                                              <Mail className="w-3 h-3 text-gray-400 shrink-0" />
+                                              <span className="truncate">{lead.email}</span>
+                                            </div>
+                                          )}
+                                        </div>
+
+                                        {/* Requested Service */}
+                                        <div className="p-2 bg-slate-50 border border-slate-100 rounded-lg text-[11px]">
+                                          <span className="text-slate-400 font-medium">Interesse: </span>
+                                          <strong className="text-slate-800">{lead.service}</strong>
+                                        </div>
+
+                                        {/* Message snippet if present */}
+                                        {lead.message && (
+                                          <p className="text-[11px] text-gray-500 italic line-clamp-2 bg-gray-50 p-2 rounded-md border border-gray-100">
+                                            "{lead.message}"
+                                          </p>
+                                        )}
+
+                                        {/* MOTIVO(S) DO PAUSA / GUARDAR PEDIDO DISPLAY ON CARD */}
+                                        {(currentStage === "Guardar Pedido" || (lead.pauseReasons && lead.pauseReasons.length > 0)) && (
+                                          <div className="p-2.5 bg-orange-50/80 border border-orange-200 rounded-lg space-y-1.5 text-left">
+                                            <div className="flex items-center justify-between text-[11px] font-extrabold text-orange-950">
+                                              <span className="flex items-center gap-1 text-orange-900">
+                                                <PauseCircle className="w-3.5 h-3.5 text-orange-600 shrink-0" />
+                                                Motivo(s) de Guarda:
+                                              </span>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleOpenPauseModal(lead, assignedTo)}
+                                                className="text-[10px] text-orange-700 hover:text-orange-950 underline font-bold cursor-pointer"
+                                              >
+                                                Alterar
+                                              </button>
+                                            </div>
+                                            <div className="flex flex-wrap gap-1">
+                                              {(!lead.pauseReasons || lead.pauseReasons.length === 0) ? (
+                                                <span className="text-[10px] italic text-orange-600 font-medium">Nenhum motivo selecionado</span>
+                                              ) : (
+                                                lead.pauseReasons.map((reason: string, rIdx: number) => {
+                                                  let icon = "📌";
+                                                  if (reason === "Prazo") icon = "⏱️";
+                                                  if (reason === "Valor") icon = "💰";
+                                                  if (reason === "Documentação") icon = "📄";
+                                                  if (reason === "Outros" || reason.startsWith("Outros")) icon = "✏️";
+
+                                                  const labelText = reason === "Outros" && lead.pauseOtherReason 
+                                                    ? `Outros: ${lead.pauseOtherReason}` 
+                                                    : reason;
+
+                                                  return (
+                                                    <span 
+                                                      key={rIdx} 
+                                                      className="px-2 py-0.5 bg-white border border-orange-300 text-orange-900 rounded text-[10px] font-bold shadow-2xs flex items-center gap-1"
+                                                    >
+                                                      <span>{icon}</span>
+                                                      <span>{labelText}</span>
+                                                    </span>
+                                                  );
+                                                })
+                                              )}
+                                            </div>
+                                          </div>
+                                        )}
+
+                                        {/* Employee Selector (Shafira / Pablo) */}
+                                        <div className="bg-slate-50 p-2 rounded-lg border border-slate-200/80 space-y-1">
+                                          <div className="flex items-center justify-between text-[11px]">
+                                            <span className="font-semibold text-slate-600 flex items-center gap-1">
+                                              <User className="w-3 h-3 text-brand-gold-600" />
+                                              Atendente:
+                                            </span>
+                                            <select
+                                              value={assignedTo}
+                                              onChange={(e) => handleUpdateLeadStage(lead.id, currentStage, e.target.value)}
+                                              className="bg-white border border-slate-300 text-slate-900 text-[11px] font-bold rounded-md px-2 py-1 focus:ring-1 focus:ring-brand-gold-500 outline-none cursor-pointer"
+                                            >
+                                              {CRM_EMPLOYEES.map(emp => (
+                                                <option key={emp} value={emp}>{emp}</option>
+                                              ))}
+                                              <option value="Sem Atribuição">Sem Atribuição</option>
+                                            </select>
+                                          </div>
+                                        </div>
+
+                                        {/* Stage Navigation */}
+                                        <div className="pt-2 border-t border-gray-100 space-y-2">
+                                          <div className="flex items-center justify-between text-[11px]">
+                                            <span className="text-gray-500 font-medium">Mover Etapa:</span>
+                                            <select
+                                              value={currentStage}
+                                              onChange={(e) => handleUpdateLeadStage(lead.id, e.target.value, assignedTo)}
+                                              className="bg-brand-navy-50 border border-brand-navy-200 text-brand-navy-950 text-[11px] font-bold rounded-md px-2 py-1 outline-none cursor-pointer hover:bg-brand-navy-100"
+                                            >
+                                              {CRM_STAGES.map(s => (
+                                                <option key={s.id} value={s.id}>{s.label}</option>
+                                              ))}
+                                            </select>
+                                          </div>
+
+                                          {/* Convert to Client Button */}
+                                          {lead.status === "Cliente Cadastrado" ? (
+                                            <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 text-[11px] font-bold flex items-center justify-center gap-1">
+                                              <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                                              <span>Cliente Cadastrado</span>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              onClick={() => handleOpenConvertModal(lead)}
+                                              className="w-full py-2 px-3 bg-gradient-to-r from-brand-gold-500 to-brand-gold-600 hover:from-brand-gold-400 hover:to-brand-gold-500 text-brand-navy-950 font-black text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                                            >
+                                              <UserPlus className="w-3.5 h-3.5" />
+                                              <span>Cadastrar como Cliente</span>
+                                            </button>
+                                          )}
+                                        </div>
+
+                                        {/* Workspace integrations if enabled */}
+                                        {isGoogleConnected && (
+                                          <div className="pt-2 border-t border-gray-100 flex flex-wrap gap-1">
+                                            {lead.driveFolderUrl ? (
+                                              <a
+                                                href={lead.driveFolderUrl}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-[10px] font-bold flex items-center gap-1"
+                                              >
+                                                <Folder className="w-3 h-3 text-blue-600" /> Drive
+                                              </a>
+                                            ) : (
+                                              <button
+                                                onClick={() => handleCreateDriveFolder(lead.id, lead.name)}
+                                                className="px-2 py-1 bg-amber-50 text-amber-700 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                                              >
+                                                <FolderPlus className="w-3 h-3" /> Drive
+                                              </button>
+                                            )}
+                                            {lead.email && (
+                                              <button
+                                                onClick={() => handleOpenGmailModal(lead)}
+                                                className="px-2 py-1 bg-red-50 text-red-700 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                                              >
+                                                <Mail className="w-3 h-3" /> E-mail
+                                              </button>
+                                            )}
+                                            <button
+                                              onClick={() => handleDeleteLead(lead.id)}
+                                              className="p-1 bg-red-50 text-red-600 hover:bg-red-100 rounded ml-auto cursor-pointer"
+                                              title="Excluir Lead"
+                                            >
+                                              <Trash2 className="w-3 h-3" />
+                                            </button>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })
+                                )}
                               </div>
-                            )}
-                          </div>
-
-                          {/* Right actions */}
-                          <div className="flex sm:flex-col items-end sm:justify-between gap-3 shrink-0 border-t sm:border-t-0 pt-3 sm:pt-0 border-gray-100">
-                            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-                              {lead.status !== "Em Atendimento" && lead.status !== "Concluído" && (
-                                <button
-                                  onClick={() => handleUpdateLeadStatus(lead.id, "Em Atendimento")}
-                                  className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 text-[10px] font-bold rounded-lg border border-amber-200 cursor-pointer"
-                                >
-                                  Marcar Atendimento
-                                </button>
-                              )}
-                              {lead.status !== "Concluído" && (
-                                <button
-                                  onClick={() => handleUpdateLeadStatus(lead.id, "Concluído")}
-                                  className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded-lg border border-emerald-200 cursor-pointer"
-                                >
-                                  Concluir Lead
-                                </button>
-                              )}
-                              <button
-                                onClick={() => handleDeleteLead(lead.id)}
-                                className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 rounded-lg border border-red-100 cursor-pointer ml-auto sm:ml-0"
-                                title="Excluir Lead"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
                             </div>
+                          );
+                        })}
+                      </div>
+                    )}
 
-                            {/* WhatsApp Direct */}
-                            <a
-                              href={`https://api.whatsapp.com/send?phone=${lead.phone.replace(/\D/g, "")}&text=${encodeURIComponent(`Olá ${lead.name}, aqui é o gestor da SP Assessoria. Recebemos sua solicitação de assessoria sobre ${lead.service}. Como podemos ajudar?`)}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] rounded-lg flex items-center gap-1 shadow-xs"
-                            >
-                              <Phone className="w-3 h-3 fill-white" />
-                              Chamar no WhatsApp
-                            </a>
-                          </div>
+                    {/* TABLE LIST VIEW */}
+                    {crmViewMode === "table" && (
+                      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-xs">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-gray-50 border-b border-gray-200 text-gray-500 font-mono uppercase text-[10px] tracking-wider">
+                              <tr>
+                                <th className="p-3.5">Cliente / Lead</th>
+                                <th className="p-3.5">WhatsApp / E-mail</th>
+                                <th className="p-3.5">Serviço Solicitado</th>
+                                <th className="p-3.5">Etapa do CRM</th>
+                                <th className="p-3.5">Atendente</th>
+                                <th className="p-3.5 text-right">Ações</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-150 font-medium text-gray-800">
+                              {filteredLeads.length === 0 ? (
+                                <tr>
+                                  <td colSpan={6} className="p-8 text-center text-gray-400">
+                                    Nenhum lead encontrado com os filtros aplicados.
+                                  </td>
+                                </tr>
+                              ) : (
+                                filteredLeads.map((lead, idx) => {
+                                  const currentStage = getLeadStage(lead);
+                                  const assignedTo = lead.assignedTo || "Shafira Nunes";
+
+                                  return (
+                                    <tr key={lead.id || idx} className="hover:bg-slate-50/80 transition-colors">
+                                      <td className="p-3.5">
+                                        <div className="font-bold text-brand-navy-900">{lead.name}</div>
+                                        <div className="text-[10px] text-gray-400 font-mono">{lead.date}</div>
+                                      </td>
+                                      <td className="p-3.5">
+                                        <div className="flex items-center gap-1.5">
+                                          <Phone className="w-3 h-3 text-emerald-600" />
+                                          <span>{lead.phone}</span>
+                                        </div>
+                                        {lead.email && <div className="text-[11px] text-gray-500">{lead.email}</div>}
+                                      </td>
+                                      <td className="p-3.5">
+                                        <span className="px-2 py-1 bg-slate-100 text-slate-800 rounded-md font-bold text-[11px]">
+                                          {lead.service}
+                                        </span>
+                                      </td>
+                                      <td className="p-3.5 space-y-1">
+                                        <select
+                                          value={currentStage}
+                                          onChange={(e) => handleUpdateLeadStage(lead.id, e.target.value, assignedTo)}
+                                          className="bg-brand-navy-50 border border-brand-navy-200 text-brand-navy-950 font-bold rounded-md px-2 py-1 text-xs outline-none cursor-pointer"
+                                        >
+                                          {CRM_STAGES.map(s => (
+                                            <option key={s.id} value={s.id}>{s.label}</option>
+                                          ))}
+                                        </select>
+
+                                        {(currentStage === "Guardar Pedido" || (lead.pauseReasons && lead.pauseReasons.length > 0)) && (
+                                          <div className="flex items-center gap-1 mt-1">
+                                            <span className="px-1.5 py-0.5 bg-orange-100 text-orange-900 border border-orange-200 rounded text-[10px] font-bold flex items-center gap-1">
+                                              <PauseCircle className="w-3 h-3 text-orange-600" />
+                                              {lead.pauseReasons && lead.pauseReasons.length > 0
+                                                ? lead.pauseReasons.map((r: string) => r === "Outros" && lead.pauseOtherReason ? `Outros: ${lead.pauseOtherReason}` : r).join(", ")
+                                                : "Guardado"}
+                                            </span>
+                                            <button
+                                              type="button"
+                                              onClick={() => handleOpenPauseModal(lead, assignedTo)}
+                                              className="text-[10px] text-orange-700 hover:text-orange-900 underline font-bold cursor-pointer"
+                                            >
+                                              Editar
+                                            </button>
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td className="p-3.5">
+                                        <select
+                                          value={assignedTo}
+                                          onChange={(e) => handleUpdateLeadStage(lead.id, currentStage, e.target.value)}
+                                          className="bg-white border border-gray-300 text-gray-900 font-bold rounded-md px-2 py-1 text-xs outline-none cursor-pointer"
+                                        >
+                                          {CRM_EMPLOYEES.map(emp => (
+                                            <option key={emp} value={emp}>{emp}</option>
+                                          ))}
+                                          <option value="Sem Atribuição">Sem Atribuição</option>
+                                        </select>
+                                      </td>
+                                      <td className="p-3.5 text-right">
+                                        <div className="flex items-center justify-end gap-2">
+                                          {lead.status === "Cliente Cadastrado" ? (
+                                            <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-lg text-[10px] font-bold">
+                                              Cadastrado
+                                            </span>
+                                          ) : (
+                                            <button
+                                              onClick={() => handleOpenConvertModal(lead)}
+                                              className="px-2.5 py-1 bg-brand-gold-500 hover:bg-brand-gold-400 text-brand-navy-950 font-bold text-[11px] rounded-lg shadow-xs cursor-pointer"
+                                            >
+                                              Cadastrar Cliente
+                                            </button>
+                                          )}
+                                          <button
+                                            onClick={() => handleDeleteLead(lead.id)}
+                                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* TAB: CLIENTES & ACOMPANHAMENTO (GESTÃO DE HISTÓRICO, DOCUMENTOS E TRÂMITES) */}
               {activeTab === "clients" && (
@@ -1459,8 +2643,8 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                                 c.name?.toLowerCase().includes(searchLower)
                               );
                             })
-                            .map((client: any) => (
-                              <div key={client.cpf} className="p-5 bg-white border border-gray-200 rounded-xl shadow-xs space-y-4 hover:shadow-sm transition-all text-xs">
+                            .map((client: any, idx: number) => (
+                              <div key={client.id || (client.cpf ? `${client.cpf}-${idx}` : `client-${idx}`)} className="p-5 bg-white border border-gray-200 rounded-xl shadow-xs space-y-4 hover:shadow-sm transition-all text-xs">
                                 <div className="flex flex-col sm:flex-row justify-between items-start gap-4">
                                   <div>
                                     <h4 className="text-sm font-bold text-brand-navy-900">{client.name}</h4>
@@ -1506,7 +2690,13 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                                   </div>
                                   <div>
                                     <span className="text-[10px] text-gray-400 block font-mono">DOCS & REGISTROS</span>
-                                    <span className="text-[11px] text-gray-600 block mt-0.5 truncate">{client.documents?.length || 0} docs cadastrados</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setViewingClientDocsModal(client)}
+                                      className="text-[11px] font-bold text-brand-navy-900 hover:text-brand-gold-600 transition-colors block mt-0.5 truncate cursor-pointer underline decoration-dotted"
+                                    >
+                                      📄 {client.documents?.length || 0} doc(s) anexado(s) (Ver todos)
+                                    </button>
                                     <span className="text-[10px] text-gray-400 block truncate mt-0.5">{client.orderInfo || "Nenhuma informação de pedido cadastrada."}</span>
                                   </div>
                                 </div>
@@ -1521,7 +2711,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                       <div className="flex justify-between items-center pb-4 border-b border-gray-100">
                         <div>
                           <h3 className="text-lg font-display font-extrabold text-brand-navy-900">
-                            {editingClient.cpf && localClients.some(c => c.cpf === editingClient.cpf) ? "Editar Informações do Cliente" : "Cadastrar Novo Cliente"}
+                            {showNewClientForm ? "Cadastrar Novo Cliente" : "Editar Informações do Cliente"}
                           </h3>
                           <p className="text-xs text-gray-500">Insira todos os dados cadastrais, documentos e atualize o status do processo.</p>
                         </div>
@@ -1558,15 +2748,16 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
-                              <label className="block text-gray-500 font-semibold mb-1">CPF (Apenas números)</label>
+                              <label className="block text-gray-500 font-semibold mb-1">CPF (Apenas 11 números)</label>
                               <input
                                 type="text"
                                 required
-                                disabled={editingClient.cpf && localClients.some(c => c.cpf === editingClient.cpf)}
+                                disabled={!showNewClientForm && Boolean(editingClient.id)}
                                 value={editingClient.cpf}
-                                onChange={(e) => setEditingClient({ ...editingClient, cpf: e.target.value.replace(/[^\d]/g, "") })}
+                                onChange={(e) => setEditingClient({ ...editingClient, cpf: e.target.value.replace(/\D/g, "").slice(0, 11) })}
+                                maxLength={11}
                                 placeholder="Ex: 12345678901"
-                                className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white disabled:bg-gray-100 disabled:text-gray-500"
+                                className="w-full bg-gray-50 border border-gray-250 rounded-lg px-3 py-2 text-xs focus:outline-hidden focus:border-brand-gold-500 focus:bg-white disabled:bg-gray-100 disabled:text-gray-500 font-mono"
                               />
                             </div>
                             <div>
@@ -1659,55 +2850,167 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                             </div>
                           </div>
 
-                          {/* Gestão de Documentos Anexados */}
-                          <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg space-y-2">
-                            <label className="block text-brand-navy-900 font-bold uppercase tracking-wider text-[10px]">Documentos Cadastrados / Entregues</label>
-                            
-                            <div className="flex gap-2">
-                              <input
-                                type="text"
-                                placeholder="Ex: CNH Digital.pdf"
-                                value={newDocInput}
-                                onChange={(e) => setNewDocInput(e.target.value)}
-                                className="flex-1 bg-white border border-gray-250 rounded-lg px-3 py-1.5 text-xs focus:outline-hidden"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (!newDocInput.trim()) return;
-                                  const currentDocs = editingClient.documents || [];
-                                  setEditingClient({
-                                    ...editingClient,
-                                    documents: [...currentDocs, newDocInput.trim()]
-                                  });
-                                  setNewDocInput("");
-                                }}
-                                className="px-3 bg-brand-navy-900 text-white font-bold rounded-lg hover:bg-brand-navy-800 transition-colors text-xs cursor-pointer"
-                              >
-                                Adicionar
-                              </button>
+                          {/* Gestão de Documentos Anexados & Arquivos */}
+                          <div className="p-4 bg-gray-50/80 border border-gray-200 rounded-xl space-y-3">
+                            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-gray-200 pb-2">
+                              <div>
+                                <label className="block text-brand-navy-900 font-bold uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                                  <Paperclip className="w-3.5 h-3.5 text-brand-gold-500" />
+                                  <span>Documentos Anexados & Arquivos do Cliente</span>
+                                </label>
+                                <p className="text-[10px] text-gray-500 mt-0.5">Suporta envio de PDF, DOC/DOCX, Imagens (PNG, JPG, WebP) e arquivos com pré-visualização</p>
+                              </div>
+                              <span className="text-[10px] font-mono font-bold bg-white px-2 py-1 rounded-md border border-gray-200 text-brand-navy-900 self-start sm:self-auto">
+                                Total: {(editingClient.documents || []).length} arquivo(s)
+                              </span>
                             </div>
 
+                            {/* File Upload Zone & Manual Add */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {/* Option 1: File Drop / Upload */}
+                              <div className="relative border-2 border-dashed border-gray-300 hover:border-brand-navy-800 bg-white p-3 rounded-xl transition-all text-center flex flex-col items-center justify-center cursor-pointer group">
+                                <input
+                                  type="file"
+                                  multiple
+                                  accept="image/*,.pdf,.doc,.docx,.txt,.xls,.xlsx"
+                                  onChange={handleUploadClientDocument}
+                                  disabled={!!uploadingDocStatus}
+                                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10 disabled:cursor-not-allowed"
+                                />
+                                <FileUp className="w-6 h-6 text-brand-navy-800 mb-1 group-hover:scale-110 transition-transform" />
+                                <span className="text-xs font-bold text-brand-navy-900">Anexar Arquivos (PDF, DOC, Fotos)</span>
+                                <span className="text-[10px] text-gray-400 mt-0.5">Clique ou arraste seus arquivos aqui</span>
+                              </div>
+
+                              {/* Option 2: Manual Text / Link Input */}
+                              <div className="bg-white p-3 rounded-xl border border-gray-200 flex flex-col justify-between space-y-2">
+                                <label className="block text-[10px] font-bold text-gray-600 uppercase tracking-wider">Adicionar Nome ou Link do Documento</label>
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    placeholder="Ex: CNH_Digital.pdf ou https://..."
+                                    value={newDocInput}
+                                    onChange={(e) => setNewDocInput(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        handleAddManualDoc();
+                                      }
+                                    }}
+                                    className="flex-1 bg-gray-50 border border-gray-250 rounded-lg px-3 py-1.5 text-xs focus:outline-hidden focus:bg-white"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={handleAddManualDoc}
+                                    className="px-3 bg-brand-navy-900 text-white font-bold rounded-lg hover:bg-brand-navy-800 transition-colors text-xs cursor-pointer flex items-center gap-1 shrink-0"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span>Anexar</span>
+                                  </button>
+                                </div>
+                                <p className="text-[10px] text-gray-400 italic">Para documentos físicos recebidos ou links externos do Google Drive/Dropbox.</p>
+                              </div>
+                            </div>
+
+                            {/* Upload Progress Alert */}
+                            {uploadingDocStatus && (
+                              <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-xs flex items-center gap-2 animate-pulse">
+                                <RefreshCw className="w-4 h-4 animate-spin text-blue-600 flex-shrink-0" />
+                                <span className="font-semibold">{uploadingDocStatus}</span>
+                              </div>
+                            )}
+
+                            {/* Attached Documents Cards Grid */}
                             {(!editingClient.documents || editingClient.documents.length === 0) ? (
-                              <p className="text-[11px] text-gray-400 italic">Nenhum documento listado para este cliente.</p>
+                              <div className="text-center py-6 bg-white border border-dashed border-gray-200 rounded-xl text-gray-400">
+                                <FileText className="w-8 h-8 text-gray-300 mx-auto mb-1" />
+                                <p className="text-xs">Nenhum documento anexado a esta ficha ainda.</p>
+                              </div>
                             ) : (
-                              <div className="flex flex-wrap gap-1.5 pt-1">
-                                {editingClient.documents.map((doc: string, idx: number) => (
-                                  <span key={idx} className="flex items-center gap-1.5 px-2 py-1 bg-white border border-gray-200 text-gray-700 rounded-md font-mono text-[10px]">
-                                    <FileText className="w-3 h-3 text-brand-gold-500" />
-                                    <span>{doc}</span>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const filtered = editingClient.documents.filter((_: any, i: number) => i !== idx);
-                                        setEditingClient({ ...editingClient, documents: filtered });
-                                      }}
-                                      className="text-red-500 hover:text-red-700 font-bold ml-1 text-xs"
-                                    >
-                                      ×
-                                    </button>
-                                  </span>
-                                ))}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 pt-1">
+                                {editingClient.documents.map((docItem: any, idx: number) => {
+                                  const doc = normalizeDocItem(docItem);
+                                  const docCategory = getDocType(doc.name, doc.type);
+
+                                  const badgeStyle = docCategory === "pdf"
+                                    ? "bg-red-50 text-red-700 border-red-200"
+                                    : docCategory === "word"
+                                    ? "bg-blue-50 text-blue-700 border-blue-200"
+                                    : docCategory === "image"
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                    : docCategory === "excel"
+                                    ? "bg-teal-50 text-teal-700 border-teal-200"
+                                    : "bg-gray-100 text-gray-700 border-gray-200";
+
+                                  return (
+                                    <div key={`edit-doc-${idx}-${doc.name || ''}`} className="bg-white border border-gray-200 rounded-xl p-3 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between space-y-2">
+                                      <div className="flex items-start justify-between gap-2">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${badgeStyle} shrink-0 font-mono`}>
+                                            {docCategory.toUpperCase()}
+                                          </span>
+                                          <span className="text-xs font-bold text-gray-800 truncate" title={doc.name}>
+                                            {doc.name}
+                                          </span>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const filtered = editingClient.documents.filter((_: any, i: number) => i !== idx);
+                                            setEditingClient({ ...editingClient, documents: filtered });
+                                          }}
+                                          className="text-gray-400 hover:text-red-600 transition-colors p-1 rounded-md hover:bg-red-50 shrink-0 cursor-pointer"
+                                          title="Remover documento"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+
+                                      <div className="text-[10px] text-gray-400 font-mono flex items-center justify-between">
+                                        <span>{doc.size ? `${(doc.size / (1024 * 1024)).toFixed(2)} MB` : "Anexo"}</span>
+                                        <span>{doc.uploadedAt || "Cadastrado"}</span>
+                                      </div>
+
+                                      <div className="flex items-center gap-1.5 pt-1 border-t border-gray-100">
+                                        <button
+                                          type="button"
+                                          onClick={() => setPreviewingDoc(doc)}
+                                          className="flex-1 px-2 py-1 bg-brand-navy-900 text-white font-bold rounded-md hover:bg-brand-navy-800 transition-colors text-[10px] flex items-center justify-center gap-1 cursor-pointer"
+                                        >
+                                          <Eye className="w-3 h-3 text-brand-gold-400" />
+                                          <span>Pré-visualizar</span>
+                                        </button>
+
+                                        {doc.url && (
+                                          <a
+                                            href={doc.url}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-md transition-colors text-[10px] flex items-center gap-1 cursor-pointer"
+                                            title="Baixar ou Abrir"
+                                          >
+                                            <Download className="w-3 h-3" />
+                                            <span>Baixar</span>
+                                          </a>
+                                        )}
+
+                                        {doc.url && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              navigator.clipboard.writeText(doc.url);
+                                              alert("Link do documento copiado para a área de transferência!");
+                                            }}
+                                            className="p-1 text-gray-500 hover:text-brand-navy-900 hover:bg-gray-100 rounded-md transition-colors cursor-pointer"
+                                            title="Copiar Link Direto"
+                                          >
+                                            <Copy className="w-3 h-3" />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             )}
                           </div>
@@ -1810,7 +3113,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                           ) : (
                             <div className="border border-gray-150 rounded-xl overflow-hidden divide-y divide-gray-100">
                               {editingClient.timeline.map((item: any, idx: number) => (
-                                <div key={idx} className="p-3 bg-[#fdfdfd] flex justify-between items-center gap-4 text-xs">
+                                <div key={`timeline-${idx}-${item.title || ''}`} className="p-3 bg-[#fdfdfd] flex justify-between items-center gap-4 text-xs">
                                   <div className="space-y-0.5">
                                     <div className="flex items-center gap-2">
                                       <span className={`w-2.5 h-2.5 rounded-full ${
@@ -1888,9 +3191,9 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {localBlog.map((post) => (
+                        {localBlog.map((post, idx) => (
                           <div 
-                            key={post.id} 
+                            key={post.id || `blog-${idx}`} 
                             className="bg-white border border-gray-150 rounded-xl overflow-hidden flex flex-col justify-between shadow-xs hover:shadow-sm"
                           >
                             <div className="flex gap-4 p-4">
@@ -2220,9 +3523,9 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                       </div>
 
                       <div className="space-y-3">
-                        {localFaqs.map((faq) => (
+                        {localFaqs.map((faq, idx) => (
                           <div 
-                            key={faq.id} 
+                            key={faq.id || `faq-${idx}`} 
                             className="bg-white border border-gray-150 rounded-xl p-4 flex flex-col sm:flex-row justify-between sm:items-center gap-4 shadow-xs"
                           >
                             <div className="space-y-1 text-left flex-1">
@@ -2670,8 +3973,8 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-gray-100">
-                            {localLeads.map((lead) => (
-                              <tr key={lead.id} className="hover:bg-gray-50/50">
+                            {localLeads.map((lead, idx) => (
+                              <tr key={lead.id ? `drive-lead-${lead.id}` : `drive-lead-${idx}`} className="hover:bg-gray-50/50">
                                 <td className="p-3 font-bold text-brand-navy-900">{lead.name}</td>
                                 <td className="p-3 text-gray-500 font-medium">{lead.service}</td>
                                 <td className="p-3 text-center">
@@ -2740,11 +4043,11 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {localReviews.map((rev) => {
+                      {localReviews.map((rev, idx) => {
                         const isApproved = rev.approved !== false;
                         return (
                           <div 
-                            key={rev.id}
+                            key={rev.id || `rev-${idx}`}
                             className={`p-5 bg-white border rounded-xl shadow-xs flex flex-col justify-between gap-4 transition-all hover:shadow-sm ${
                               !isApproved ? "border-l-4 border-l-amber-500 border-gray-200" : "border-gray-200"
                             }`}
@@ -2847,6 +4150,174 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                 </div>
               )}
 
+              {/* TAB 8: SUPABASE DATABASE MANAGEMENT */}
+              {activeTab === "supabase" && (
+                <div className="space-y-6 text-left animate-fade-in">
+                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 border-b border-gray-200 pb-4">
+                    <div>
+                      <h2 className="text-lg font-display font-extrabold text-brand-navy-900 flex items-center gap-2">
+                        <Database className="w-5 h-5 text-emerald-600" />
+                        <span>Banco de Dados Supabase</span>
+                      </h2>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Gerencie a conexão, credenciais e sincronização com o banco de dados PostgreSQL do Supabase.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className={`px-3 py-1 rounded-full text-[11px] font-bold flex items-center gap-1.5 ${
+                        supabaseStatus === "connected" 
+                          ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                          : supabaseStatus === "warning"
+                          ? "bg-amber-100 text-amber-800 border border-amber-300"
+                          : supabaseStatus === "error"
+                          ? "bg-red-100 text-red-800 border border-red-300"
+                          : "bg-gray-100 text-gray-700 border border-gray-300"
+                      }`}>
+                        <span className={`w-2 h-2 rounded-full ${
+                          supabaseStatus === "connected" ? "bg-emerald-500 animate-pulse" :
+                          supabaseStatus === "warning" ? "bg-amber-500 animate-ping" :
+                          supabaseStatus === "error" ? "bg-red-500" : "bg-gray-400"
+                        }`} />
+                        {supabaseStatus === "connected" ? "Supabase Operacional" :
+                         supabaseStatus === "warning" ? "Tabelas Pendentes" :
+                         supabaseStatus === "error" ? "Erro de Conexão" : "Aguardando Configuração"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* SUPABASE CREDENTIALS FORM */}
+                  <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm space-y-5">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 bg-emerald-50 text-emerald-700 rounded-xl">
+                        <Server className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-brand-navy-900">Credenciais da API Supabase</h3>
+                        <p className="text-xs text-gray-500">Veja abaixo onde encontrar cada chave no seu painel do Supabase</p>
+                      </div>
+                    </div>
+
+                    {/* Guia explicativo em destaque */}
+                    <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-4 text-xs text-emerald-950 space-y-2">
+                      <p className="font-bold text-emerald-900 flex items-center gap-1.5">
+                        <Info className="w-4 h-4 text-emerald-700" />
+                        <span>Onde encontrar as chaves no Supabase Dashboard:</span>
+                      </p>
+                      <ol className="list-decimal list-inside space-y-1.5 pl-1 text-[11px] font-medium text-emerald-900/90">
+                        <li>Acesse o painel em <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer" className="underline font-bold text-emerald-800">supabase.com/dashboard</a> e abra o seu projeto.</li>
+                        <li>No menu lateral esquerdo, clique no ícone de engrenagem ⚙️ (<strong>Project Settings</strong> ou <strong>Configurações</strong>).</li>
+                        <li>No submenu de configurações, clique em <strong>API</strong> (ou <strong>API Keys / Data API</strong>).</li>
+                        <li>Na seção <strong>Project URL</strong>, copie a URL (exemplo: <code className="bg-emerald-100 px-1 py-0.5 rounded text-emerald-800">https://xyz.supabase.co</code>).</li>
+                        <li>Na seção <strong>Project API Keys</strong>, você verá a chave <code className="bg-emerald-100 px-1 py-0.5 rounded text-emerald-800">anon</code> / <code className="bg-emerald-100 px-1 py-0.5 rounded text-emerald-800">public</code> (Anon Public Key) e a chave <code className="bg-emerald-100 px-1 py-0.5 rounded text-emerald-800">service_role</code> / <code className="bg-emerald-100 px-1 py-0.5 rounded text-emerald-800">secret</code> (Service Role Key).</li>
+                      </ol>
+                    </div>
+
+                    {supabaseMessage && (
+                      <div className={`p-4 rounded-xl text-xs leading-relaxed font-semibold flex items-start gap-2.5 ${
+                        supabaseStatus === "error" ? "bg-red-50 text-red-700 border border-red-200" :
+                        supabaseStatus === "warning" ? "bg-amber-50 text-amber-800 border border-amber-200" :
+                        "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                      }`}>
+                        <Shield className="w-4 h-4 shrink-0 mt-0.5" />
+                        <span>{supabaseMessage}</span>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1.5 md:col-span-2">
+                        <label className="text-xs font-bold text-gray-700">Project URL (URL do Projeto Supabase)</label>
+                        <input
+                          type="text"
+                          value={supabaseUrl}
+                          onChange={(e) => setSupabaseUrl(e.target.value)}
+                          placeholder="https://sua-id-de-projeto.supabase.co"
+                          className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-mono focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-gray-700">Anon Public Key (Chave Anônima)</label>
+                        <input
+                          type="password"
+                          value={supabaseAnonKey}
+                          onChange={(e) => setSupabaseAnonKey(e.target.value)}
+                          placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                          className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-mono focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-gray-700">Service Role Secret Key (Opcional para Servidor)</label>
+                        <input
+                          type="password"
+                          value={supabaseServiceRoleKey}
+                          onChange={(e) => setSupabaseServiceRoleKey(e.target.value)}
+                          placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                          className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-mono focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-gray-100 flex flex-wrap gap-3">
+                      <button
+                        onClick={handleSaveSupabaseConfig}
+                        disabled={savingSupabase}
+                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-all shadow-sm cursor-pointer disabled:opacity-50"
+                      >
+                        <Save className="w-4 h-4" />
+                        <span>{savingSupabase ? "Salvando..." : "Salvar Credenciais"}</span>
+                      </button>
+
+                      <button
+                        onClick={handleTestSupabaseConnection}
+                        disabled={testingSupabase}
+                        className="px-5 py-2.5 bg-brand-navy-900 hover:bg-brand-navy-800 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-all shadow-sm cursor-pointer disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${testingSupabase ? "animate-spin" : ""}`} />
+                        <span>{testingSupabase ? "Testando..." : "Testar Conexão"}</span>
+                      </button>
+
+                      <button
+                        onClick={handleSyncSupabaseData}
+                        disabled={syncingSupabase}
+                        className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl flex items-center gap-2 transition-all shadow-sm cursor-pointer disabled:opacity-50"
+                      >
+                        <Database className="w-4 h-4" />
+                        <span>{syncingSupabase ? "Sincronizando..." : "Sincronizar Dados Existentes"}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* SQL SCRIPT FOR SUPABASE WITH RLS */}
+                  <div className="bg-brand-navy-950 rounded-2xl p-6 text-white space-y-4 shadow-md">
+                    <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-white/10 pb-4">
+                      <div>
+                        <h3 className="text-sm font-bold flex items-center gap-2 text-emerald-400">
+                          <Copy className="w-4 h-4" />
+                          <span>Código SQL para Execução no Supabase (com RLS ativado)</span>
+                        </h3>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          Copie este código e execute no <strong>SQL Editor</strong> do painel Supabase para criar as tabelas e políticas de segurança.
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={handleCopySqlScript}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm shrink-0"
+                      >
+                        {sqlCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                        <span>{sqlCopied ? "Copiado com Sucesso!" : "Copiar Código SQL"}</span>
+                      </button>
+                    </div>
+
+                    <div className="relative bg-black/60 rounded-xl p-4 border border-white/10 max-h-96 overflow-y-auto font-mono text-[11px] text-emerald-300 leading-relaxed">
+                      <pre className="whitespace-pre-wrap">{SUPABASE_SQL_SCRIPT}</pre>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* BOTTOM STATS/FOOTER */}
               <div className="mt-8 border-t border-gray-200 pt-4 text-center text-[10px] text-gray-400 font-mono flex flex-col sm:flex-row justify-between gap-2">
                 <span>© 2026 SP Assessoria de Recursos Administrativos • Ambiente Restrito</span>
@@ -2918,8 +4389,8 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                     </div>
                   ) : (
                     <div className="space-y-1.5 max-h-60 overflow-y-auto divide-y divide-gray-100">
-                      {driveFiles.map((file) => (
-                        <div key={file.id} className="py-2.5 flex items-center justify-between gap-3 group text-xs">
+                      {driveFiles.map((file, idx) => (
+                        <div key={file.id || `file-${idx}`} className="py-2.5 flex items-center justify-between gap-3 group text-xs">
                           <div className="flex items-center gap-2 truncate">
                             <img src={file.iconLink} alt="" className="w-4 h-4 opacity-75" referrerPolicy="no-referrer" />
                             <span className="font-medium text-gray-700 truncate group-hover:text-blue-600">{file.name}</span>
@@ -3122,6 +4593,437 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
                   <span>{creatingTask ? "Agendando..." : "Criar Tarefa no Google"}</span>
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 4: DOCUMENT PREVIEW MODAL */}
+        {previewingDoc && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+            <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-2xl border border-gray-100 flex flex-col text-left">
+              <div className="bg-brand-navy-900 p-4 text-white flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <FileText className="w-5 h-5 text-brand-gold-500 shrink-0" />
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold text-white truncate max-w-md">{previewingDoc.name}</h3>
+                    <p className="text-[10px] text-gray-300 font-mono">
+                      {previewingDoc.size ? `${(previewingDoc.size / (1024 * 1024)).toFixed(2)} MB • ` : ""}
+                      {previewingDoc.uploadedAt || "Documento Anexo"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {previewingDoc.url && (
+                    <a
+                      href={previewingDoc.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-1.5 bg-brand-gold-500 hover:bg-brand-gold-400 text-brand-navy-950 font-bold text-xs rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Abrir em Nova Aba</span>
+                    </a>
+                  )}
+                  <button
+                    onClick={() => setPreviewingDoc(null)}
+                    className="p-1.5 hover:bg-white/10 rounded-lg text-white/80 hover:text-white transition-all cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-4 overflow-y-auto flex-1 bg-gray-100 flex items-center justify-center min-h-[400px]">
+                {getDocType(previewingDoc.name, previewingDoc.type) === "image" && previewingDoc.url ? (
+                  <div className="text-center">
+                    <img
+                      src={previewingDoc.url}
+                      alt={previewingDoc.name}
+                      className="max-h-[70vh] w-auto mx-auto object-contain rounded-lg shadow-md border border-gray-200"
+                    />
+                  </div>
+                ) : getDocType(previewingDoc.name, previewingDoc.type) === "pdf" && previewingDoc.url ? (
+                  <iframe
+                    src={previewingDoc.url}
+                    title={previewingDoc.name}
+                    className="w-full h-[70vh] rounded-lg border border-gray-200 bg-white"
+                  />
+                ) : getDocType(previewingDoc.name, previewingDoc.type) === "word" && previewingDoc.url ? (
+                  <iframe
+                    src={`https://docs.google.com/viewer?url=${encodeURIComponent(previewingDoc.url)}&embedded=true`}
+                    title={previewingDoc.name}
+                    className="w-full h-[70vh] rounded-lg border border-gray-200 bg-white"
+                  />
+                ) : previewingDoc.url ? (
+                  <div className="text-center p-8 bg-white rounded-xl shadow-xs border border-gray-200 max-w-md">
+                    <FileText className="w-16 h-16 text-brand-gold-500 mx-auto mb-3" />
+                    <h4 className="text-sm font-bold text-brand-navy-900 mb-1">{previewingDoc.name}</h4>
+                    <p className="text-xs text-gray-500 mb-4">Este arquivo pode ser baixado ou visualizado no navegador.</p>
+                    <a
+                      href={previewingDoc.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-4 py-2 bg-brand-navy-900 text-white text-xs font-bold rounded-lg hover:bg-brand-navy-800 transition-colors inline-flex items-center gap-2 cursor-pointer"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>Baixar / Abrir Arquivo</span>
+                    </a>
+                  </div>
+                ) : (
+                  <div className="text-center p-8 bg-white rounded-xl shadow-xs border border-gray-200 max-w-md">
+                    <FileText className="w-16 h-16 text-gray-300 mx-auto mb-3" />
+                    <h4 className="text-sm font-bold text-brand-navy-900 mb-1">{previewingDoc.name}</h4>
+                    <p className="text-xs text-gray-500 mb-2">Este documento foi cadastrado como registro ou nome de referência física.</p>
+                    <span className="text-[11px] bg-amber-50 text-amber-800 px-3 py-1 rounded-md font-mono inline-block border border-amber-200">Sem arquivo digital direto anexado</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 5: CLIENT QUICK DOCUMENTS LIST MODAL */}
+        {viewingClientDocsModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+            <div className="bg-white rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl border border-gray-100 flex flex-col text-left">
+              <div className="bg-brand-navy-900 p-4 text-white flex justify-between items-center">
+                <div>
+                  <h3 className="text-sm font-bold flex items-center gap-2">
+                    <Paperclip className="w-4 h-4 text-brand-gold-500" />
+                    <span>Documentos da Ficha do Cliente</span>
+                  </h3>
+                  <p className="text-[11px] text-gray-300 mt-0.5">Cliente: <strong>{viewingClientDocsModal.name}</strong> • CPF: {viewingClientDocsModal.cpf}</p>
+                </div>
+                <button
+                  onClick={() => setViewingClientDocsModal(null)}
+                  className="p-1.5 hover:bg-white/10 rounded-lg text-white/80 hover:text-white transition-all cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 max-h-[70vh] overflow-y-auto space-y-3 bg-gray-50/50">
+                {(!viewingClientDocsModal.documents || viewingClientDocsModal.documents.length === 0) ? (
+                  <p className="text-xs text-gray-500 text-center py-8 italic">Nenhum documento anexado para este cliente.</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {viewingClientDocsModal.documents.map((docItem: any, idx: number) => {
+                      const doc = normalizeDocItem(docItem);
+                      const docCategory = getDocType(doc.name, doc.type);
+                      return (
+                        <div key={`view-doc-${idx}-${doc.name || ''}`} className="p-3.5 bg-white border border-gray-200 rounded-xl space-y-2 flex flex-col justify-between shadow-2xs">
+                          <div className="flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-brand-gold-500 shrink-0" />
+                            <span className="text-xs font-bold text-gray-800 truncate" title={doc.name}>{doc.name}</span>
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] text-gray-400 font-mono">
+                            <span className="uppercase font-bold text-brand-navy-800">{docCategory}</span>
+                            <span>{doc.uploadedAt || "Anexo"}</span>
+                          </div>
+                          <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
+                            <button
+                              onClick={() => {
+                                setViewingClientDocsModal(null);
+                                setPreviewingDoc(doc);
+                              }}
+                              className="flex-1 px-2.5 py-1.5 bg-brand-navy-900 text-white font-bold text-[10px] rounded-lg hover:bg-brand-navy-800 transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-brand-gold-400" />
+                              <span>Pré-visualizar</span>
+                            </button>
+                            {doc.url && (
+                              <a
+                                href={doc.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold text-[10px] rounded-lg transition-colors cursor-pointer flex items-center gap-1"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>Abrir</span>
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="p-3 bg-white border-t border-gray-100 flex justify-end">
+                <button
+                  onClick={() => setViewingClientDocsModal(null)}
+                  className="px-4 py-2 bg-brand-navy-900 text-white font-bold text-xs rounded-lg hover:bg-brand-navy-800 transition-all cursor-pointer"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: CONVERT LEAD TO REGISTERED CLIENT */}
+        {convertModalLead && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+            <div className="bg-white rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl border border-gray-100 flex flex-col text-left">
+              <div className="bg-brand-navy-900 p-5 text-white flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-brand-gold-500 text-brand-navy-950 rounded-xl">
+                    <UserPlus className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white">Cadastrar Cliente a Partir de Lead</h3>
+                    <p className="text-[11px] text-gray-300">Vincula o lead diretamente ao sistema de acompanhamento oficial por CPF.</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setConvertModalLead(null)}
+                  className="p-1.5 hover:bg-white/10 rounded-lg text-white/80 hover:text-white transition-all cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleConfirmConvert} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+                {/* CPF FIELD (MANDATORY FOR PORTAL TRACKING) */}
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1">
+                  <label className="block text-xs font-extrabold text-amber-900">
+                    CPF do Cliente * (Obrigatório para consulta de trâmites)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={convertCpf}
+                    onChange={(e) => setConvertCpf(e.target.value.replace(/\D/g, "").slice(0, 11))}
+                    maxLength={11}
+                    placeholder="12345678901"
+                    className="w-full bg-white border border-amber-300 text-amber-950 font-mono font-bold rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-gold-500 outline-none"
+                  />
+                  <p className="text-[10px] text-amber-800">
+                    Com este CPF, o cliente poderá consultar seus prazos e trâmites na página de acompanhamento pública.
+                  </p>
+                </div>
+
+                {/* Name */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Nome Completo *</label>
+                  <input
+                    type="text"
+                    required
+                    value={convertName}
+                    onChange={(e) => setConvertName(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-250 text-gray-900 rounded-lg px-3 py-2 text-xs font-bold focus:bg-white focus:ring-1 focus:ring-brand-gold-500 outline-none"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Phone */}
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">WhatsApp / Telefone</label>
+                    <input
+                      type="text"
+                      value={convertPhone}
+                      onChange={(e) => setConvertPhone(e.target.value)}
+                      className="w-full bg-gray-50 border border-gray-250 text-gray-900 rounded-lg px-3 py-2 text-xs font-medium focus:bg-white focus:ring-1 focus:ring-brand-gold-500 outline-none"
+                    />
+                  </div>
+
+                  {/* Email */}
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">E-mail</label>
+                    <input
+                      type="email"
+                      value={convertEmail}
+                      onChange={(e) => setConvertEmail(e.target.value)}
+                      className="w-full bg-gray-50 border border-gray-250 text-gray-900 rounded-lg px-3 py-2 text-xs font-medium focus:bg-white focus:ring-1 focus:ring-brand-gold-500 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Service */}
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Serviço em Andamento</label>
+                    <input
+                      type="text"
+                      value={convertService}
+                      onChange={(e) => setConvertService(e.target.value)}
+                      className="w-full bg-gray-50 border border-gray-250 text-gray-900 rounded-lg px-3 py-2 text-xs font-bold focus:bg-white focus:ring-1 focus:ring-brand-gold-500 outline-none"
+                    />
+                  </div>
+
+                  {/* Assigned Employee */}
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">Atendente Responsável</label>
+                    <select
+                      value={convertAssignedTo}
+                      onChange={(e) => setConvertAssignedTo(e.target.value)}
+                      className="w-full bg-gray-50 border border-gray-250 text-gray-900 font-bold rounded-lg px-3 py-2 text-xs focus:bg-white focus:ring-1 focus:ring-brand-gold-500 outline-none cursor-pointer"
+                    >
+                      {CRM_EMPLOYEES.map(emp => (
+                        <option key={emp} value={emp}>{emp}</option>
+                      ))}
+                      <option value="Sem Atribuição">Sem Atribuição</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Stage */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Etapa Atual no CRM</label>
+                  <select
+                    value={convertStage}
+                    onChange={(e) => setConvertStage(e.target.value)}
+                    className="w-full bg-gray-50 border border-gray-250 text-gray-900 font-bold rounded-lg px-3 py-2 text-xs focus:bg-white focus:ring-1 focus:ring-brand-gold-500 outline-none cursor-pointer"
+                  >
+                    {CRM_STAGES.map(s => (
+                      <option key={s.id} value={s.id}>{s.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Notes */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">Anotações Internas do Trâmites</label>
+                  <textarea
+                    value={convertNotes}
+                    onChange={(e) => setConvertNotes(e.target.value)}
+                    rows={3}
+                    placeholder="Adicione observações sobre documentação, protocolo ou andamento..."
+                    className="w-full bg-gray-50 border border-gray-250 text-gray-900 rounded-lg p-3 text-xs focus:bg-white focus:ring-1 focus:ring-brand-gold-500 outline-none resize-none"
+                  />
+                </div>
+
+                <div className="pt-4 border-t border-gray-100 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConvertModalLead(null)}
+                    className="px-4 py-2 bg-white border border-gray-250 text-gray-700 font-bold text-xs rounded-xl hover:bg-gray-50 transition-all cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isConverting}
+                    className="px-5 py-2 bg-gradient-to-r from-brand-gold-500 to-brand-gold-600 hover:from-brand-gold-400 hover:to-brand-gold-500 text-brand-navy-950 font-black text-xs rounded-xl flex items-center gap-1.5 shadow-md cursor-pointer disabled:opacity-50 transition-all"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>{isConverting ? "Cadastrando..." : "Confirmar e Cadastrar Cliente"}</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL: GUARDAR PEDIDO (SELEÇÃO DE MOTIVOS DA PAUSA) */}
+        {pauseModalLead && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+            <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl border border-gray-100 flex flex-col text-left">
+              <div className="bg-orange-600 p-5 text-white flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/20 rounded-xl text-white">
+                    <PauseCircle className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white">Guardar Pedido / Pausar</h3>
+                    <p className="text-[11px] text-orange-100">
+                      Cliente: <strong className="text-white">{pauseModalLead.name}</strong>
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPauseModalLead(null)}
+                  className="p-1 rounded-lg text-orange-100 hover:text-white hover:bg-orange-500/50 transition-colors cursor-pointer text-xl"
+                >
+                  ×
+                </button>
+              </div>
+
+              <form onSubmit={handleConfirmPauseReasons} className="p-5 space-y-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-gray-800">
+                    Selecione um ou mais motivos para guardar o pedido:
+                  </label>
+                  <p className="text-[11px] text-gray-500">
+                    Marque as opções aplicáveis para catalogar a pausa no atendimento.
+                  </p>
+                </div>
+
+                <div className="space-y-2.5 pt-1">
+                  {[
+                    { id: "Prazo", label: "Prazo", icon: "⏱️", desc: "Aguardando prazo ou tempo do cliente/órgão" },
+                    { id: "Valor", label: "Valor", icon: "💰", desc: "Negociação de valores ou pendência financeira" },
+                    { id: "Documentação", label: "Documentação", icon: "📄", desc: "Pendente entrega de documentos solicitados" },
+                    { id: "Outros", label: "Outros", icon: "✏️", desc: "Especifique o motivo no campo abaixo" },
+                  ].map((option) => {
+                    const isChecked = pauseModalReasons.includes(option.id);
+                    return (
+                      <label
+                        key={option.id}
+                        className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                          isChecked
+                            ? "bg-orange-50/80 border-orange-300 shadow-2xs"
+                            : "bg-gray-50 border-gray-200 hover:bg-gray-100/80"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setPauseModalReasons(prev => [...prev, option.id]);
+                            } else {
+                              setPauseModalReasons(prev => prev.filter(r => r !== option.id));
+                            }
+                          }}
+                          className="mt-0.5 w-4 h-4 text-orange-600 rounded border-gray-300 focus:ring-orange-500 cursor-pointer"
+                        />
+                        <div className="flex-1 text-xs">
+                          <div className="font-bold text-gray-900 flex items-center gap-1.5">
+                            <span>{option.icon}</span>
+                            <span>{option.label}</span>
+                          </div>
+                          <div className="text-[11px] text-gray-500 mt-0.5">{option.desc}</div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {pauseModalReasons.includes("Outros") && (
+                  <div className="space-y-1.5 pt-2 animate-fade-in">
+                    <label className="text-xs font-bold text-gray-700">
+                      Outros (especifique o motivo):
+                    </label>
+                    <input
+                      type="text"
+                      value={pauseModalOtherText}
+                      onChange={(e) => setPauseModalOtherText(e.target.value)}
+                      placeholder="Ex: Cliente em viagem, aguardando retorno de familiar..."
+                      className="w-full bg-gray-50 border border-gray-300 rounded-lg p-2.5 text-xs text-gray-900 focus:bg-white focus:ring-1 focus:ring-orange-500 outline-none"
+                    />
+                  </div>
+                )}
+
+                <div className="pt-4 border-t border-gray-100 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPauseModalLead(null)}
+                    className="px-4 py-2 bg-white border border-gray-250 text-gray-700 font-bold text-xs rounded-xl hover:bg-gray-50 transition-all cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-orange-600 hover:bg-orange-500 text-white font-extrabold text-xs rounded-xl flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
+                  >
+                    <PauseCircle className="w-4 h-4" />
+                    <span>Mover para Guardar Pedido</span>
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

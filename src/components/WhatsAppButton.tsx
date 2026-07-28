@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { MessageSquare } from "lucide-react";
 
-export function WhatsAppButton() {
+interface WhatsAppButtonProps {
+  onOpenModal?: () => void;
+}
+
+export function WhatsAppButton({ onOpenModal }: WhatsAppButtonProps) {
   const [showTooltip, setShowTooltip] = useState(false);
 
   useEffect(() => {
@@ -13,7 +17,11 @@ export function WhatsAppButton() {
   }, []);
 
   const handleClick = () => {
-    // Standard contact links provided: (11) 98704-9051 / (11) 99334-4293
+    if (onOpenModal) {
+      onOpenModal();
+      return;
+    }
+    // Standard contact links fallback
     const phone = "5511987049051"; // Default to primary
     const text = "Olá! Gostaria de falar com um especialista da SP Assessoria de Recursos Administrativos sobre o meu caso.";
     const encoded = encodeURIComponent(text);

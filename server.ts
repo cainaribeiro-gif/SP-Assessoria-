@@ -5,6 +5,7 @@ import fs from "fs";
 import nodemailer from "nodemailer";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import { createClient as createSupabaseClient, SupabaseClient } from "@supabase/supabase-js";
 import { initializeApp as initializeAdminApp, getApps as getAdminApps, getApp as getAdminApp, cert } from "firebase-admin/app";
 import { getAuth as getAdminAuth } from "firebase-admin/auth";
 import { getFirestore as getAdminFirestore } from "firebase-admin/firestore";
@@ -59,8 +60,8 @@ export async function sendEmailNotification(data: {
   const gmailUser = process.env.GMAIL_USER || "atendimento.spassessoria@gmail.com";
   const gmailPass = process.env.GMAIL_APP_PASSWORD;
 
-  if (!gmailPass) {
-    console.log(`[Nodemailer Notice] GMAIL_APP_PASSWORD not configured. Skipping SMTP dispatch for "${data.subject}".`);
+  if (!gmailPass || gmailPass.trim() === "") {
+    console.log(`[Nodemailer Notice] GMAIL_APP_PASSWORD não configurada. Envio de e-mail pulado para "${data.subject}".`);
     return false;
   }
 
@@ -69,7 +70,7 @@ export async function sendEmailNotification(data: {
       service: "gmail",
       auth: {
         user: gmailUser,
-        pass: gmailPass
+        pass: gmailPass.trim()
       }
     });
 
@@ -81,10 +82,21 @@ export async function sendEmailNotification(data: {
       html: data.html
     });
 
-    console.log(`[Nodemailer Success] Email successfully sent to ${data.to || gmailUser}`);
+    console.log(`[Nodemailer Success] Email enviado com sucesso para ${data.to || gmailUser}`);
     return true;
-  } catch (err) {
-    console.error("[Nodemailer Error] Error sending email:", err);
+  } catch (err: any) {
+    const errStr = String(err?.message || err || "");
+    if (
+      err?.code === "EAUTH" || 
+      err?.responseCode === 534 || 
+      errStr.includes("Application-specific password required") ||
+      errStr.includes("534-5.7.9") ||
+      errStr.includes("Invalid login")
+    ) {
+      console.warn(`[Nodemailer Notice] GMAIL_APP_PASSWORD requer uma Senha de App de 16 caracteres criada no painel de Segurança do Google. O envio do e-mail foi ignorado com segurança.`);
+    } else {
+      console.warn(`[Nodemailer Warning] Erro ao enviar e-mail ("${data.subject}"):`, errStr);
+    }
     return false;
   }
 }
@@ -270,6 +282,7 @@ const adminDb = new SmartFirestore();
 async function ensureAdminUsersExist() {
   const adminEmails = [
     "atendimento.spassessoria@gmail.com",
+    "atendimento.spassessoria@gamail.com",
     "cainapribeiro@gmail.com",
     "atendimento@sprecursosadm.com.br"
   ];
@@ -373,6 +386,72 @@ function writeLeadsBackup(leads: any[]): void {
   }
 }
 
+// Path to official solicitacoes offline backup
+const SOLICITACOES_BACKUP_PATH = path.join(process.cwd(), "src", "solicitacoes-backup.json");
+
+function readSolicitacoesBackup(): any[] {
+  try {
+    if (fs.existsSync(SOLICITACOES_BACKUP_PATH)) {
+      const raw = fs.readFileSync(SOLICITACOES_BACKUP_PATH, "utf-8");
+      return JSON.parse(raw);
+    }
+  } catch (error) {
+    console.error("Erro ao ler solicitacoes-backup.json:", error);
+  }
+  return [];
+}
+
+function writeSolicitacoesBackup(items: any[]): void {
+  try {
+    fs.writeFileSync(SOLICITACOES_BACKUP_PATH, JSON.stringify(items, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Erro ao gravar solicitacoes-backup.json:", error);
+  }
+}
+
+// Path to Supabase runtime config
+const SUPABASE_CONFIG_PATH = path.join(process.cwd(), "supabase-config.json");
+
+function readSupabaseConfigFile(): { url: string; anonKey: string; serviceRoleKey: string } {
+  try {
+    if (fs.existsSync(SUPABASE_CONFIG_PATH)) {
+      const raw = fs.readFileSync(SUPABASE_CONFIG_PATH, "utf-8");
+      return JSON.parse(raw);
+    }
+  } catch (err) {
+    console.error("Erro ao ler supabase-config.json:", err);
+  }
+  return { url: "", anonKey: "", serviceRoleKey: "" };
+}
+
+function writeSupabaseConfigFile(cfg: { url: string; anonKey: string; serviceRoleKey?: string }): void {
+  try {
+    fs.writeFileSync(SUPABASE_CONFIG_PATH, JSON.stringify(cfg, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Erro ao gravar supabase-config.json:", err);
+  }
+}
+
+let serverSupabaseClient: SupabaseClient | null = null;
+
+function getServerSupabaseClient(): SupabaseClient | null {
+  if (serverSupabaseClient) return serverSupabaseClient;
+
+  const fileConfig = readSupabaseConfigFile();
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || fileConfig.url;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || fileConfig.serviceRoleKey || fileConfig.anonKey;
+
+  if (url && key && url.startsWith("https://")) {
+    try {
+      serverSupabaseClient = createSupabaseClient(url, key);
+      return serverSupabaseClient;
+    } catch (err) {
+      console.error("[Supabase Server] Error creating client:", err);
+    }
+  }
+  return null;
+}
+
 // Helper to synchronize locally saved leads to Firestore when connection is available
 async function syncOfflineLeads(): Promise<void> {
   const offlineLeads = readLeadsBackup();
@@ -433,12 +512,21 @@ async function requireAuth(req: AuthenticatedRequest, res: express.Response, nex
     return res.status(401).json({ error: "Token de autenticação não fornecido." });
   }
 
-  const token = authHeader.split("Bearer ")[1];
+  const token = (authHeader.split("Bearer ")[1] || "").trim();
+
+  if (!token || token === "null" || token === "undefined" || token === "[object Object]") {
+    return res.status(401).json({ error: "Token de autenticação inválido ou ausente." });
+  }
 
   // Direct bypass for custom admin login sessions
   if (token.startsWith("custom_session_")) {
     const email = token.replace("custom_session_", "").toLowerCase();
-    const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com", "atendimento@sprecursosadm.com.br"];
+    const adminEmails = [
+      "atendimento.spassessoria@gmail.com", 
+      "atendimento.spassessoria@gamail.com",
+      "cainapribeiro@gmail.com", 
+      "atendimento@sprecursosadm.com.br"
+    ];
     if (adminEmails.includes(email)) {
       req.user = {
         uid: "custom_uid_" + email.split("@")[0],
@@ -450,6 +538,11 @@ async function requireAuth(req: AuthenticatedRequest, res: express.Response, nex
     } else {
       return res.status(403).json({ error: "Acesso negado: Perfil sem privilégios necessários." });
     }
+  }
+
+  // Ensure JWT format (3 parts separated by dots) before passing to Firebase Admin
+  if (token.split(".").length !== 3) {
+    return res.status(401).json({ error: "Token de autenticação malformado." });
   }
 
   try {
@@ -468,7 +561,12 @@ async function requireAuth(req: AuthenticatedRequest, res: express.Response, nex
 
       if (!profileSnap.exists) {
         // Auto-provision admin profile if it matches the designated admins
-        const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com", "atendimento@sprecursosadm.com.br"];
+        const adminEmails = [
+          "atendimento.spassessoria@gmail.com", 
+          "atendimento.spassessoria@gamail.com",
+          "cainapribeiro@gmail.com", 
+          "atendimento@sprecursosadm.com.br"
+        ];
         if (adminEmails.includes(email.toLowerCase())) {
           role = "admin";
           await profileRef.set({
@@ -502,7 +600,12 @@ async function requireAuth(req: AuthenticatedRequest, res: express.Response, nex
       active = profileData.active !== false;
     } catch (firestoreError) {
       console.warn("[Firestore Warning] Error loading profile from Firestore. Using secure offline fallback:", firestoreError);
-      const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com", "atendimento@sprecursosadm.com.br"];
+      const adminEmails = [
+        "atendimento.spassessoria@gmail.com", 
+        "atendimento.spassessoria@gamail.com",
+        "cainapribeiro@gmail.com", 
+        "atendimento@sprecursosadm.com.br"
+      ];
       if (adminEmails.includes(email.toLowerCase())) {
         role = "admin";
       } else {
@@ -519,8 +622,18 @@ async function requireAuth(req: AuthenticatedRequest, res: express.Response, nex
     };
 
     next();
-  } catch (error) {
-    console.error("Erro na validação do token:", error);
+  } catch (error: any) {
+    const errStr = String(error?.message || error || "");
+    if (
+      error?.code === "auth/argument-error" || 
+      error?.code === "auth/invalid-id-token" || 
+      error?.code === "auth/id-token-expired" ||
+      errStr.includes("Decoding Firebase ID token failed")
+    ) {
+      console.warn(`[Auth Notice] Token de autenticação não validado (${error?.code || "formato/expiração"}).`);
+    } else {
+      console.warn(`[Auth Notice] Falha na verificação de token: ${errStr}`);
+    }
     return res.status(401).json({ error: "Token inválido ou expirado." });
   }
 }
@@ -567,27 +680,17 @@ const app = express();
 app.use(express.json({ limit: "5mb" }));
 
   // CORS Middleware
-  const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(",")
-    : ["http://localhost:3000", "http://localhost:5173", "https://ais-dev-2775dfuvo4eivzv6zekf4k-415350584874.us-east1.run.app", "https://ais-pre-2775dfuvo4eivzv6zekf4k-415350584874.us-east1.run.app"];
-
-  if (process.env.APP_URL) {
-    allowedOrigins.push(process.env.APP_URL);
-  }
-
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (origin) {
-      if (allowedOrigins.includes(origin)) {
-        res.setHeader("Access-Control-Allow-Origin", origin);
-        res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-        res.setHeader("Access-Control-Allow-Credentials", "true");
-      } else {
-        if (req.path.startsWith("/api/admin/") || req.path.startsWith("/api/site-data") && req.method === "POST") {
-          return res.status(403).json({ error: "CORS: Origem não autorizada." });
-        }
-      }
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    } else {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
     }
     if (req.method === "OPTIONS") {
       return res.status(200).end();
@@ -777,25 +880,18 @@ app.use(express.json({ limit: "5mb" }));
     }
   });
 
-  // 2. POST /api/leads: Public lead submission with validation, sanitization, rate-limiting, and honeypot
-  app.post("/api/leads", rateLimiter(60000, 5), async (req, res) => {
+  // 2. POST /api/leads: Public lead & budget request submission handler
+  app.post("/api/leads", rateLimiter(60000, 60), async (req, res) => {
     try {
-      const { name, email, phone, service, message, type, website, lgpdConsent } = req.body;
+      const { name, email, phone, service, message, type, website, lgpdConsent, category, estimatedPrice } = req.body;
 
       // 1. Honeypot check for bots
       if (website && website.trim() !== "") {
         console.log("[Honeypot] Bot submission blocked.");
-        return res.json({ success: true, message: "Solicitação recebida com sucesso." });
+        return res.json({ success: true, message: "Solicitação recebida com sucesso.", protocol: "SPA-2026-00000" });
       }
 
-      // 2. Strict payload check (reject extra properties)
-      const allowedFields = ["name", "email", "phone", "service", "message", "type", "website", "lgpdConsent"];
-      const extraFields = Object.keys(req.body).filter(key => !allowedFields.includes(key));
-      if (extraFields.length > 0) {
-        return res.status(400).json({ error: "Payload inválido: propriedades não permitidas." });
-      }
-
-      // 3. Validation & Length limit
+      // 2. Validation & Length limit
       if (!name || typeof name !== "string" || name.trim() === "") {
         return res.status(400).json({ error: "Nome é obrigatório." });
       }
@@ -805,84 +901,494 @@ app.use(express.json({ limit: "5mb" }));
 
       const cleanName = name.trim().slice(0, 100);
       const cleanPhone = phone.trim().slice(0, 30);
+      const cleanPhoneDigits = cleanPhone.replace(/\D/g, "") || "00000000000";
+      const rawCpfFromReq = (req.body.cpf || req.body.clientCpf || "").replace(/\D/g, "");
+      const cleanCpfForTracking = rawCpfFromReq.length === 11 ? rawCpfFromReq : cleanPhoneDigits;
       const cleanEmail = email ? String(email).trim().toLowerCase().slice(0, 100) : "";
       const cleanService = service ? String(service).trim().slice(0, 100) : "Geral";
+      const cleanCategory = category ? String(category).trim().slice(0, 100) : "";
+      const cleanEstimatedPrice = estimatedPrice ? String(estimatedPrice).trim().slice(0, 100) : "";
       const cleanMessage = message ? String(message).trim().slice(0, 1000) : "";
       const cleanType = type ? String(type).trim().slice(0, 50) : "Contato";
       const cleanConsent = lgpdConsent === true;
 
-      // 4. Double-submit prevention (within 2 minutes)
+      // 3. Double-submit debouncing (within 2 seconds)
       const duplicateKey = `${cleanEmail}:${cleanPhone}`;
       const lastSubmitted = recentSubmissions.get(duplicateKey);
       const now = Date.now();
-      if (lastSubmitted && now - lastSubmitted < 120000) {
-        return res.status(429).json({ error: "Você já enviou uma solicitação recentemente. Por favor, aguarde." });
+      if (lastSubmitted && now - lastSubmitted < 2000) {
+        return res.status(429).json({ error: "Aguarde um instante antes de enviar novamente." });
       }
       recentSubmissions.set(duplicateKey, now);
 
+      // Generate Protocol Code
+      const year = new Date().getFullYear();
+      const randomCode = Math.floor(10000 + Math.random() * 90000);
+      const protocol = req.body.protocol || `SPA-${year}-${randomCode}`;
+
       const leadId = `lead-${Date.now()}`;
+      const nowFormatted = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+      const nowISO = new Date().toISOString();
+
       const newLead = {
         id: leadId,
+        protocol: protocol,
         name: cleanName,
+        cpf: cleanCpfForTracking,
         email: cleanEmail,
         phone: cleanPhone,
         service: cleanService,
+        category: cleanCategory,
+        estimatedPrice: cleanEstimatedPrice,
         message: cleanMessage,
-        date: new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+        date: nowFormatted,
         status: "Novo",
         type: cleanType,
         lgpdConsent: cleanConsent
       };
 
+      // 4. Save Lead in Firestore
       try {
         await adminDb.collection("leads").doc(leadId).set(newLead);
-        console.log(`[Lead Created] ID=${leadId} Service=${cleanService} Type=${cleanType} Consent=${cleanConsent}`);
+        
+        // Also save client tracking record so client can track this protocol on the homepage
+        const clientId = `cli-orc-${Date.now()}`;
+        await adminDb.collection("clients").doc(clientId).set({
+          id: clientId,
+          cpf: cleanCpfForTracking,
+          name: cleanName,
+          email: cleanEmail,
+          phone: cleanPhone,
+          service: cleanService,
+          protocol: protocol,
+          currentStep: "Análise Inicial de Orçamento",
+          lastUpdate: nowFormatted,
+          orderInfo: cleanMessage || `Solicitação de Orçamento: ${cleanService}${cleanEstimatedPrice ? ` (Estimativa: ${cleanEstimatedPrice})` : ''}`,
+          documents: [],
+          timeline: [
+            {
+              title: "Orçamento Registrado",
+              description: "Solicitação de orçamento gravada com sucesso pelo simulador online.",
+              date: nowFormatted,
+              author: "Portal de Orçamentos",
+              status: "completed"
+            },
+            {
+              title: "Análise Técnica em Fila",
+              description: "Um de nossos especialistas entrará em contato em breve via WhatsApp para formalizar a proposta.",
+              date: nowFormatted,
+              author: "Equipe SP Assessoria",
+              status: "current"
+            }
+          ]
+        });
+
+        console.log(`[Lead Created] ID=${leadId} Protocol=${protocol} Service=${cleanService} Type=${cleanType}`);
       } catch (firestoreError) {
-        console.warn("[Firestore Warning] Error creating lead in Firestore, saving to local backup instead:", firestoreError);
-        const currentBackup = readLeadsBackup();
-        currentBackup.push(newLead);
-        writeLeadsBackup(currentBackup);
+        console.warn("[Firestore Warning] Error creating lead in Firestore:", firestoreError);
+      }
+
+      // Always persist lead to local backup file
+      const currentBackup = readLeadsBackup();
+      const existingLeadIdx = currentBackup.findIndex((l: any) => l.id === newLead.id || (l.protocol && l.protocol === newLead.protocol));
+      if (existingLeadIdx >= 0) {
+        currentBackup[existingLeadIdx] = newLead;
+      } else {
+        currentBackup.unshift(newLead);
+      }
+      writeLeadsBackup(currentBackup);
+
+      // Also persist to local clients backup for instant protocol tracking
+      const localClients = readClientsDataFile();
+      localClients.unshift({
+        id: `cli-orc-${Date.now()}`,
+        cpf: cleanCpfForTracking,
+        name: cleanName,
+        email: cleanEmail,
+        phone: cleanPhone,
+        service: cleanService,
+        protocol: protocol,
+        currentStep: "Análise Inicial de Orçamento",
+        lastUpdate: nowFormatted,
+        orderInfo: cleanMessage || `Solicitação de Orçamento: ${cleanService}${cleanEstimatedPrice ? ` (Estimativa: ${cleanEstimatedPrice})` : ''}`,
+        documents: [],
+        timeline: [
+          {
+            title: "Orçamento Registrado",
+            description: "Solicitação de orçamento gravada com sucesso pelo simulador online.",
+            date: nowFormatted,
+            author: "Portal de Orçamentos",
+            status: "completed"
+          },
+          {
+            title: "Análise Técnica em Fila",
+            description: "Um de nossos especialistas entrará em contato em breve via WhatsApp para formalizar a proposta.",
+            date: nowFormatted,
+            author: "Equipe SP Assessoria",
+            status: "current"
+          }
+        ]
+      });
+      writeClientsDataFile(localClients);
+
+      // Save lead to Supabase if configured
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          await sb.from("leads").upsert({
+            id: leadId,
+            protocol: protocol,
+            name: cleanName,
+            email: cleanEmail,
+            phone: cleanPhone,
+            service: cleanService,
+            status: "Novo",
+            notes: cleanMessage,
+            details: JSON.stringify(newLead),
+            created_at: nowISO
+          });
+
+          await sb.from("clients").upsert({
+            id: `cli-orc-${Date.now()}`,
+            protocol: protocol,
+            name: cleanName,
+            cpf: cleanCpfForTracking,
+            email: cleanEmail,
+            phone: cleanPhone,
+            service: cleanService,
+            status: "novo",
+            current_step: "Análise Inicial de Orçamento",
+            last_update: nowFormatted,
+            order_info: cleanMessage || `Solicitação de Orçamento: ${cleanService}`,
+            created_at: nowISO
+          });
+          console.log(`[Supabase Sync] Lead & Client with Protocol ${protocol} persisted in Supabase.`);
+        } catch (sbErr) {
+          console.warn("[Supabase Notice] Lead save notice:", sbErr);
+        }
       }
 
       // Dispatch notification email to atendimento.spassessoria@gmail.com
       const adminNoticeHtml = `
-        <h2>Novo Lead Recebido - SP Assessoria</h2>
-        <p><strong>Nome:</strong> ${cleanName}</p>
-        <p><strong>WhatsApp / Telefone:</strong> ${cleanPhone}</p>
-        <p><strong>E-mail:</strong> ${cleanEmail || "Não informado"}</p>
-        <p><strong>Serviço Solicitado:</strong> ${cleanService}</p>
-        <p><strong>Tipo de Solicitação:</strong> ${cleanType}</p>
-        <p><strong>Mensagem:</strong> ${cleanMessage || "Nenhuma mensagem enviada"}</p>
-        <p><strong>Data:</strong> ${newLead.date}</p>
+        <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; background-color: #ffffff;">
+          <h2 style="color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; margin-top: 0;">Novo Pedido de Orçamento - SP Assessoria</h2>
+          
+          <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
+            <p style="margin: 0; font-size: 13px; color: #64748b; font-weight: bold; text-transform: uppercase;">Código do Protocolo</p>
+            <p style="margin: 4px 0 0; font-size: 20px; font-weight: bold; color: #0f172a; font-family: monospace;">${protocol}</p>
+          </div>
+
+          <p style="margin: 8px 0;"><strong>Nome do Cliente:</strong> ${cleanName}</p>
+          <p style="margin: 8px 0;"><strong>WhatsApp / Telefone:</strong> ${cleanPhone}</p>
+          <p style="margin: 8px 0;"><strong>E-mail:</strong> ${cleanEmail || "Não informado"}</p>
+          <p style="margin: 8px 0;"><strong>Categoria:</strong> ${cleanCategory || "Geral"}</p>
+          <p style="margin: 8px 0;"><strong>Serviço Solicitado:</strong> ${cleanService}</p>
+          ${cleanEstimatedPrice ? `<p style="margin: 8px 0;"><strong>Estimativa de Valor:</strong> ${cleanEstimatedPrice}</p>` : ""}
+          <p style="margin: 8px 0;"><strong>Descrição do Caso:</strong> ${cleanMessage || "Não detalhado"}</p>
+          <p style="margin: 8px 0;"><strong>Tipo de Entrada:</strong> ${cleanType}</p>
+          <p style="margin: 8px 0;"><strong>Data / Hora:</strong> ${newLead.date}</p>
+
+          <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
+          <p style="font-size: 12px; color: #64748b; margin: 0;">Mensagem automática gerada pelo Portal de Serviços da SP Assessoria de Recursos Administrativos.</p>
+        </div>
       `;
 
       sendEmailNotification({
         to: "atendimento.spassessoria@gmail.com",
-        subject: `[Novo Lead] ${cleanName} - ${cleanService}`,
+        subject: `[Novo Orçamento - ${protocol}] ${cleanName} - ${cleanService}`,
         html: adminNoticeHtml
       }).catch(err => console.warn("Background admin email dispatch notice:", err));
 
       if (cleanEmail) {
         const leadReceiptHtml = `
-          <h2>Olá, ${cleanName}!</h2>
-          <p>Agradecemos pelo seu contato com a <strong>SP Assessoria de Recursos Administrativos</strong>.</p>
-          <p>Recebemos sua solicitação para o serviço <strong>${cleanService}</strong> com sucesso.</p>
-          <p>Sua mensagem já foi encaminhada para nossa equipe de especialistas, que entrará em contato em breve através do seu WhatsApp/telefone cadastrado (${cleanPhone}).</p>
-          <br>
-          <p>Atenciosamente,<br><strong>Equipe SP Assessoria</strong><br>atendimento.spassessoria@gmail.com</p>
+          <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; background-color: #ffffff;">
+            <div style="text-align: center; margin-bottom: 20px;">
+              <h2 style="color: #0f172a; margin: 0;">Recebemos sua Solicitação de Orçamento!</h2>
+              <p style="color: #64748b; font-size: 14px; margin-top: 4px;">SP Assessoria de Recursos Administrativos</p>
+            </div>
+
+            <p style="font-size: 15px;">Olá, <strong>${cleanName}</strong>!</p>
+            <p style="font-size: 14px; line-height: 1.6;">Agradecemos pelo seu interesse nos serviços da <strong>SP Assessoria</strong>. Seu pedido de orçamento foi registrado em nosso sistema com sucesso.</p>
+
+            <div style="background-color: #f1f5f9; border-left: 4px solid #0f172a; padding: 16px; border-radius: 6px; margin: 20px 0;">
+              <p style="margin: 0 0 6px; font-size: 12px; color: #475569; font-weight: bold; text-transform: uppercase;">Número do Protocolo</p>
+              <p style="margin: 0; font-size: 22px; font-weight: bold; color: #0f172a; font-family: monospace;">${protocol}</p>
+            </div>
+
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 20px;">
+              <tr>
+                <td style="padding: 8px 0; font-weight: bold; color: #475569; width: 40%;">Serviço Solicitado:</td>
+                <td style="padding: 8px 0; color: #0f172a;">${cleanService}</td>
+              </tr>
+              ${cleanEstimatedPrice ? `
+              <tr>
+                <td style="padding: 8px 0; font-weight: bold; color: #475569;">Estimativa de Valor:</td>
+                <td style="padding: 8px 0; color: #0284c7; font-weight: bold;">${cleanEstimatedPrice}</td>
+              </tr>
+              ` : ''}
+              <tr>
+                <td style="padding: 8px 0; font-weight: bold; color: #475569;">Contato Registrado:</td>
+                <td style="padding: 8px 0; color: #0f172a;">${cleanPhone}</td>
+              </tr>
+            </table>
+
+            <div style="background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; padding: 14px; margin-bottom: 20px; color: #065f46; font-size: 13px; line-height: 1.5;">
+              <strong>Próximos Passos:</strong> Em breve um de nossos especialistas analisará os detalhes do seu caso e entrará em contato diretamente via WhatsApp ou ligação telefônica para prestar todo o atendimento necessário.
+            </div>
+
+            <p style="font-size: 12px; color: #64748b; line-height: 1.5;">
+              Você também pode acompanhar o andamento da sua solicitação a qualquer momento na página inicial do nosso site inserindo o código do seu protocolo (<strong>${protocol}</strong>).
+            </p>
+
+            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0 16px;" />
+            <p style="font-size: 12px; color: #64748b; text-align: center; margin: 0;">
+              <strong>SP Assessoria de Recursos Administrativos</strong><br>
+              E-mail: atendimento.spassessoria@gmail.com | Telefones: (11) 98704-9051 / (11) 99334-4293
+            </p>
+          </div>
         `;
 
         sendEmailNotification({
           to: cleanEmail,
-          subject: `Confirmação de Recebimento - SP Assessoria`,
+          subject: `Confirmação de Pedido de Orçamento - Protocolo ${protocol} | SP Assessoria`,
           html: leadReceiptHtml
         }).catch(err => console.warn("Background lead receipt email notice:", err));
       }
 
-      res.json({ success: true, message: "Solicitação recebida com sucesso." });
+      res.json({
+        success: true,
+        protocol: protocol,
+        message: "Solicitação de orçamento registrada com sucesso."
+      });
     } catch (error) {
       console.error("Erro ao criar lead no Firestore:", error);
       res.status(500).json({ error: "Erro ao registrar solicitação no banco de dados." });
+    }
+  });
+
+  // 3. POST /api/solicitacoes: Public official request submission handler
+  app.post("/api/solicitacoes", rateLimiter(60000, 60), async (req, res) => {
+    try {
+      const data = req.body;
+      if (!data || !data.clientName || !data.clientPhone || !data.clientCpf) {
+        return res.status(400).json({ error: "Nome, Telefone e CPF são obrigatórios." });
+      }
+
+      const year = new Date().getFullYear();
+      const randomCode = Math.floor(10000 + Math.random() * 90000);
+      const protocol = data.protocol || `SPA-${year}-${randomCode}`;
+      const docId = data.id || `sol-${Date.now()}`;
+      const cleanCpf = data.clientCpf.replace(/\D/g, "");
+
+      const nowISO = new Date().toISOString();
+      const nowFormatted = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+
+      const requestPayload = {
+        id: docId,
+        protocol: protocol,
+        clientName: String(data.clientName).trim(),
+        clientEmail: data.clientEmail ? String(data.clientEmail).trim().toLowerCase() : "",
+        clientPhone: String(data.clientPhone).trim(),
+        clientCpf: data.clientCpf,
+        service: data.service || "Geral",
+        description: data.description ? String(data.description).trim() : "",
+        status: data.status || "novo",
+        priority: "media",
+        assignedTo: "atendimento.spassessoria@gmail.com",
+        attachments: data.attachments || [],
+        timeline: data.timeline || [
+          {
+            title: "Solicitação Aberta",
+            description: "Formulário público recebido pelo portal e registrado para análise técnica.",
+            date: nowFormatted,
+            author: "Portal Público",
+            status: "completed"
+          },
+          {
+            title: "Análise Inicial em Andamento",
+            description: "Sua solicitação foi encaminhada para a equipe de recursos administrativos.",
+            date: nowFormatted,
+            author: "Sistema",
+            status: "current"
+          }
+        ],
+        createdAt: nowISO,
+        updatedAt: nowISO
+      };
+
+      // 1. Save to Firestore
+      try {
+        await adminDb.collection("solicitacoes").doc(docId).set(requestPayload);
+        await adminDb.collection("clients").doc(`cli-${cleanCpf}`).set({
+          id: `cli-${cleanCpf}`,
+          cpf: cleanCpf,
+          name: requestPayload.clientName,
+          email: requestPayload.clientEmail,
+          phone: requestPayload.clientPhone,
+          service: requestPayload.service,
+          protocol: protocol,
+          currentStep: "Análise Inicial de Solicitação",
+          lastUpdate: nowFormatted,
+          orderInfo: requestPayload.description,
+          documents: requestPayload.attachments,
+          timeline: requestPayload.timeline
+        });
+        await adminDb.collection("leads").doc(`lead-${docId}`).set({
+          id: `lead-${docId}`,
+          cpf: cleanCpf,
+          name: requestPayload.clientName,
+          email: requestPayload.clientEmail,
+          phone: requestPayload.clientPhone,
+          service: requestPayload.service,
+          message: requestPayload.description,
+          date: nowFormatted,
+          status: "Novo",
+          type: "Formulário Oficial",
+          lgpdConsent: true
+        });
+      } catch (fsErr) {
+        console.warn("[Firestore Warning] Error saving official request to Firestore, backing up locally:", fsErr);
+      }
+
+      // 2. Save to local backups
+      const localSols = readSolicitacoesBackup();
+      localSols.unshift(requestPayload);
+      writeSolicitacoesBackup(localSols);
+
+      const localLeads = readLeadsBackup();
+      const solLeadRecord = {
+        id: `lead-${docId}`,
+        protocol: protocol,
+        name: requestPayload.clientName,
+        email: requestPayload.clientEmail,
+        phone: requestPayload.clientPhone,
+        service: requestPayload.service,
+        message: requestPayload.description,
+        date: nowFormatted,
+        status: "Novo",
+        type: "Formulário Oficial",
+        lgpdConsent: true
+      };
+      const existingLeadIdx = localLeads.findIndex((l: any) => l.id === solLeadRecord.id || (l.protocol && l.protocol === protocol));
+      if (existingLeadIdx >= 0) {
+        localLeads[existingLeadIdx] = solLeadRecord;
+      } else {
+        localLeads.unshift(solLeadRecord);
+      }
+      writeLeadsBackup(localLeads);
+
+      const localClients = readClientsDataFile();
+      const existingClientIdx = localClients.findIndex((c: any) => c.cpf === cleanCpf);
+      const clientRecord = {
+        id: `cli-${cleanCpf}`,
+        cpf: cleanCpf,
+        name: requestPayload.clientName,
+        email: requestPayload.clientEmail,
+        phone: requestPayload.clientPhone,
+        service: requestPayload.service,
+        protocol: protocol,
+        currentStep: "Análise Inicial de Solicitação",
+        lastUpdate: nowFormatted,
+        orderInfo: requestPayload.description,
+        documents: requestPayload.attachments,
+        timeline: requestPayload.timeline
+      };
+      if (existingClientIdx >= 0) {
+        localClients[existingClientIdx] = clientRecord;
+      } else {
+        localClients.push(clientRecord);
+      }
+      writeClientsDataFile(localClients);
+
+      // 3. Save to Supabase if configured
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          await sb.from("leads").upsert({
+            id: `lead-${docId}`,
+            name: requestPayload.clientName,
+            email: requestPayload.clientEmail,
+            phone: requestPayload.clientPhone,
+            service: requestPayload.service,
+            protocol: protocol,
+            status: "Novo",
+            notes: requestPayload.description,
+            details: JSON.stringify(requestPayload),
+            created_at: nowISO
+          });
+
+          await sb.from("clients").upsert({
+            id: `cli-${cleanCpf}`,
+            protocol: protocol,
+            name: requestPayload.clientName,
+            cpf: cleanCpf,
+            email: requestPayload.clientEmail,
+            phone: requestPayload.clientPhone,
+            service: requestPayload.service,
+            status: "novo",
+            current_step: "Análise Inicial de Solicitação",
+            last_update: nowFormatted,
+            order_info: requestPayload.description,
+            documents: requestPayload.attachments,
+            timeline: requestPayload.timeline,
+            created_at: nowISO
+          });
+
+          console.log(`[Supabase Sync] Official request ${protocol} persisted in Supabase.`);
+        } catch (sbErr) {
+          console.warn("[Supabase Notice] Official request save notice:", sbErr);
+        }
+      }
+
+      // 4. Send emails
+      const adminNoticeHtml = `
+        <h2>Nova Solicitação Oficial de Serviço - SP Assessoria</h2>
+        <p><strong>Protocolo Gerado:</strong> ${protocol}</p>
+        <p><strong>Cliente:</strong> ${requestPayload.clientName}</p>
+        <p><strong>CPF:</strong> ${requestPayload.clientCpf}</p>
+        <p><strong>WhatsApp:</strong> ${requestPayload.clientPhone}</p>
+        <p><strong>E-mail:</strong> ${requestPayload.clientEmail || "Não informado"}</p>
+        <p><strong>Serviço:</strong> ${requestPayload.service}</p>
+        <p><strong>Anexos:</strong> ${requestPayload.attachments.length} arquivo(s)</p>
+        <p><strong>Relato:</strong> ${requestPayload.description}</p>
+      `;
+
+      sendEmailNotification({
+        to: "atendimento.spassessoria@gmail.com",
+        subject: `[Protocolo ${protocol}] Nova Solicitação - ${requestPayload.clientName}`,
+        html: adminNoticeHtml
+      }).catch(err => console.warn("Background admin email dispatch notice:", err));
+
+      if (requestPayload.clientEmail) {
+        const clientEmailHtml = `
+          <h2>Sua Solicitação foi Protocolada com Sucesso!</h2>
+          <p>Olá, <strong>${requestPayload.clientName}</strong>!</p>
+          <p>Confirmamos o recebimento oficial da sua solicitação na <strong>SP Assessoria de Recursos Administrativos</strong>.</p>
+          <br>
+          <p style="font-size: 16px; color: #0f172a; font-weight: bold;">Seu Protocolo Único de Acompanhamento: ${protocol}</p>
+          <br>
+          <p>Você pode acompanhar o andamento do seu processo a qualquer momento em nosso site utilizando seu protocolo ou CPF.</p>
+          <p>Nossa equipe entrará em contato em breve via WhatsApp (${requestPayload.clientPhone}) para o prosseguimento.</p>
+          <br>
+          <p>Atenciosamente,<br><strong>Equipe SP Assessoria</strong></p>
+        `;
+
+        sendEmailNotification({
+          to: requestPayload.clientEmail,
+          subject: `Protocolo ${protocol} - Solicitação Recebida | SP Assessoria`,
+          html: clientEmailHtml
+        }).catch(err => console.warn("Background client email dispatch notice:", err));
+      }
+
+      res.json({
+        success: true,
+        protocol: protocol,
+        id: docId,
+        message: "Solicitação oficial protocolada com sucesso no sistema!"
+      });
+    } catch (error) {
+      console.error("Erro ao registrar solicitação oficial:", error);
+      res.status(500).json({ error: "Erro interno ao registrar solicitação oficial." });
     }
   });
 
@@ -895,7 +1401,12 @@ app.use(express.json({ limit: "5mb" }));
     const { email, password } = req.body;
     const normEmail = email?.trim().toLowerCase();
     const normPassword = password?.trim();
-    const adminEmails = ["atendimento.spassessoria@gmail.com", "cainapribeiro@gmail.com", "atendimento@sprecursosadm.com.br"];
+    const adminEmails = [
+      "atendimento.spassessoria@gmail.com", 
+      "atendimento.spassessoria@gamail.com",
+      "cainapribeiro@gmail.com", 
+      "atendimento@sprecursosadm.com.br"
+    ];
 
     if (!normEmail || !normPassword) {
       return res.status(400).json({ error: "E-mail e senha são obrigatórios." });
@@ -928,32 +1439,534 @@ app.use(express.json({ limit: "5mb" }));
     });
   });
 
-  // 2. GET /api/admin/leads: Retrieve leads strictly for administrative profiles
+  // SUPABASE CONFIG & MANAGEMENT ENDPOINTS
+  app.get("/api/admin/supabase-config", requireAuth, (req: AuthenticatedRequest, res) => {
+    const fileCfg = readSupabaseConfigFile();
+    const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || fileCfg.url || "";
+    const anonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || fileCfg.anonKey || "";
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || fileCfg.serviceRoleKey || "";
+
+    res.json({
+      configured: Boolean(url && anonKey && url.startsWith("https://")),
+      url,
+      anonKey,
+      serviceRoleKey
+    });
+  });
+
+  app.post("/api/admin/supabase-config", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { url, anonKey, serviceRoleKey } = req.body;
+      const cleanUrl = (url || "").trim();
+      const cleanAnon = (anonKey || "").trim();
+      const cleanService = (serviceRoleKey || "").trim();
+
+      writeSupabaseConfigFile({
+        url: cleanUrl,
+        anonKey: cleanAnon,
+        serviceRoleKey: cleanService
+      });
+
+      // Reset runtime client instance to force re-initialization
+      serverSupabaseClient = null;
+
+      res.json({
+        success: true,
+        message: "Configuração do Supabase salva com sucesso!",
+        configured: Boolean(cleanUrl && cleanAnon && cleanUrl.startsWith("https://"))
+      });
+    } catch (err: any) {
+      console.error("Erro ao salvar configuração do Supabase:", err);
+      res.status(500).json({ error: "Erro ao salvar credenciais do Supabase." });
+    }
+  });
+
+  app.post("/api/admin/supabase-test", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { url, key } = req.body;
+      const testUrl = (url || "").trim();
+      const testKey = (key || "").trim();
+
+      if (!testUrl || !testKey) {
+        return res.status(400).json({ error: "Informe a URL e a Chave (Anon ou Service Role) do Supabase para testar." });
+      }
+
+      if (!testUrl.startsWith("https://")) {
+        return res.status(400).json({ error: "A URL do Supabase deve começar com 'https://' (ex: https://xyz.supabase.co)." });
+      }
+
+      const testClient = createSupabaseClient(testUrl, testKey);
+      
+      // Attempt query to verify connection
+      const { data, error } = await testClient.from("leads").select("id").limit(1);
+
+      if (error) {
+        // Check if error is because table doesn't exist yet
+        if (error.code === "42P01" || error.message.includes("relation") || error.message.includes("does not exist")) {
+          return res.json({
+            success: true,
+            warning: true,
+            message: "Conexão estabelecida com sucesso com o Supabase! Nota: A tabela 'leads' ainda não foi criada. Execute o script SQL no Supabase para criar as tabelas."
+          });
+        }
+        return res.status(400).json({ error: `Erro na resposta do Supabase: ${error.message} (Código: ${error.code})` });
+      }
+
+      return res.json({
+        success: true,
+        message: "Conexão com o Supabase testada com sucesso! As tabelas estão prontas e operacionais."
+      });
+    } catch (err: any) {
+      console.error("Erro ao testar Supabase:", err);
+      res.status(500).json({ error: err.message || "Falha ao conectar com o Supabase." });
+    }
+  });
+
+  app.post("/api/admin/supabase-sync", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const sb = getServerSupabaseClient();
+      if (!sb) {
+        return res.status(400).json({ error: "Supabase não está configurado. Preencha a URL e a Chave antes de sincronizar." });
+      }
+
+      // 1. Sync site data
+      const siteData = readSiteDataFile() || {};
+      const { error: siteErr } = await sb.from("site_data").upsert({
+        id: "main",
+        company_name: siteData.companyName || "SP Assessoria",
+        phone: siteData.phone || "",
+        email: siteData.email || "",
+        hero: siteData.hero || null,
+        services: siteData.services || null,
+        faqs: siteData.faqs || null,
+        blog: siteData.blog || null,
+        reviews: siteData.reviews || null,
+        config: siteData.config || null,
+        updated_at: new Date().toISOString()
+      });
+
+      if (siteErr && !siteErr.message.includes("relation")) {
+        console.warn("[Supabase Sync Notice] Site data sync notice:", siteErr);
+      }
+
+      // 2. Sync leads
+      const leads = siteData.leads || readLeadsBackup() || [];
+      if (leads.length > 0) {
+        for (const l of leads) {
+          await sb.from("leads").upsert({
+            id: l.id || `lead-${Date.now()}`,
+            name: l.name || "Sem Nome",
+            email: l.email || "",
+            phone: l.phone || "",
+            service: l.service || "Geral",
+            status: l.status || "Novo",
+            notes: l.message || l.notes || "",
+            details: JSON.stringify(l),
+            created_at: l.created_at || new Date().toISOString()
+          });
+        }
+      }
+
+      // 3. Sync clients
+      const clients = readClientsDataFile() || [];
+      if (clients.length > 0) {
+        for (const c of clients) {
+          const cleanCpf = (c.cpf || "").replace(/\D/g, "");
+          if (cleanCpf) {
+            await sb.from("clients").upsert({
+              id: c.id || `cli-${cleanCpf}`,
+              protocol: c.protocol || `SPA-${cleanCpf.slice(-4)}`,
+              name: c.name || "Cliente Sem Nome",
+              cpf: cleanCpf,
+              email: c.email || "",
+              phone: c.phone || "",
+              service: c.service || "",
+              status: c.status || "ativo",
+              current_step: c.currentStep || "Em Análise",
+              last_update: c.lastUpdate || "",
+              order_info: c.orderInfo || "",
+              documents: c.documents || [],
+              timeline: c.timeline || [],
+              updated_at: new Date().toISOString()
+            });
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        message: `Sincronização concluída com sucesso! Sincronizados ${leads.length} leads, ${clients.length} fichas de clientes e todas as configurações do site.`
+      });
+    } catch (err: any) {
+      console.error("Erro ao sincronizar com Supabase:", err);
+      res.status(500).json({ error: "Erro durante a sincronização dos dados com o Supabase." });
+    }
+  });
+
+  // 2. GET /api/admin/leads: Retrieve leads merged from Supabase, Firestore, and local backups
   app.get("/api/admin/leads", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente", "consulta"]), async (req: AuthenticatedRequest, res) => {
     try {
-      let leadsList: any[] = [];
+      const leadsMap = new Map<string, any>();
+
+      // A. Query Supabase if configured
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          const { data: sbLeads, error: sbErr } = await sb.from("leads").select("*");
+          if (!sbErr && sbLeads && Array.isArray(sbLeads)) {
+            for (const item of sbLeads) {
+              let detailsObj: any = {};
+              if (item.details) {
+                try {
+                  detailsObj = typeof item.details === 'string' ? JSON.parse(item.details) : item.details;
+                } catch (e) {
+                  detailsObj = {};
+                }
+              }
+
+              const leadObj = {
+                id: item.id || detailsObj.id || `lead-sb-${Date.now()}`,
+                protocol: item.protocol || detailsObj.protocol || "",
+                name: item.name || detailsObj.name || detailsObj.clientName || "Sem Nome",
+                email: item.email || detailsObj.email || detailsObj.clientEmail || "",
+                phone: item.phone || detailsObj.phone || detailsObj.clientPhone || "",
+                service: item.service || detailsObj.service || "Geral",
+                category: detailsObj.category || "",
+                estimatedPrice: detailsObj.estimatedPrice || "",
+                message: item.notes || detailsObj.message || detailsObj.description || detailsObj.notes || "",
+                date: detailsObj.date || (item.created_at ? new Date(item.created_at).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }) : new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })),
+                status: item.status || detailsObj.status || "Novo",
+                type: detailsObj.type || (detailsObj.clientName ? "Formulário Oficial" : "Contato"),
+                lgpdConsent: detailsObj.lgpdConsent !== false
+              };
+
+              const key = leadObj.id || leadObj.protocol || `${leadObj.name}-${leadObj.phone}`;
+              leadsMap.set(key, leadObj);
+            }
+          }
+        } catch (sbException) {
+          console.warn("[Supabase Warning] Error fetching leads from Supabase:", sbException);
+        }
+      }
+
+      // B. Query Firestore
       try {
         const leadsColRef = adminDb.collection("leads");
         const leadsSnapshot = await leadsColRef.get();
         leadsSnapshot.forEach((docSnap) => {
-          leadsList.push(docSnap.data());
+          const data = docSnap.data();
+          if (data && (data.id || data.name)) {
+            const key = data.id || data.protocol || `${data.name}-${data.phone}`;
+            const existing = leadsMap.get(key);
+            leadsMap.set(key, { ...existing, ...data });
+          }
         });
       } catch (firestoreError) {
-        console.warn("[Firestore Warning] Error loading leads from Firestore, using offline backups:", firestoreError);
-        leadsList = readLeadsBackup();
+        console.warn("[Firestore Warning] Error loading leads from Firestore:", firestoreError);
       }
 
-      // Sort leads by date descending
+      // C. Query Local Backup File
+      const offlineLeads = readLeadsBackup() || [];
+      for (const l of offlineLeads) {
+        if (l && (l.id || l.name)) {
+          const key = l.id || l.protocol || `${l.name}-${l.phone}`;
+          if (!leadsMap.has(key)) {
+            leadsMap.set(key, l);
+          }
+        }
+      }
+
+      // D. Query Solicitacoes Backup
+      const offlineSols = readSolicitacoesBackup() || [];
+      for (const s of offlineSols) {
+        if (s && s.id) {
+          const key = `lead-${s.id}`;
+          if (!leadsMap.has(key) && !leadsMap.has(s.protocol)) {
+            leadsMap.set(key, {
+              id: key,
+              protocol: s.protocol || "",
+              name: s.clientName || "Sem Nome",
+              email: s.clientEmail || "",
+              phone: s.clientPhone || "",
+              service: s.service || "Geral",
+              message: s.description || "",
+              date: s.createdAt ? new Date(s.createdAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }) : new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+              status: s.status === "novo" ? "Novo" : (s.status || "Novo"),
+              type: "Formulário Oficial",
+              lgpdConsent: true
+            });
+          }
+        }
+      }
+
+      // E. Build array and sort descending by date
+      const leadsList = Array.from(leadsMap.values());
       leadsList.sort((a, b) => {
         const dateA = a.date ? new Date(a.date.replace(/,/, "")).getTime() : 0;
         const dateB = b.date ? new Date(b.date.replace(/,/, "")).getTime() : 0;
-        return dateB - dateA || b.id.localeCompare(a.id);
+        return dateB - dateA || (b.id || "").localeCompare(a.id || "");
       });
+
+      // Update local backup file so it stays synced
+      writeLeadsBackup(leadsList);
 
       res.json(leadsList);
     } catch (error) {
-      console.error("Erro ao buscar leads no Firestore:", error);
+      console.error("Erro ao buscar leads:", error);
       res.status(500).json({ error: "Erro ao carregar leads do banco de dados." });
+    }
+  });
+
+  // 2b. POST /api/admin/leads/update-stage: Update lead stage, assigned employee, and notes in real time
+  app.post("/api/admin/leads/update-stage", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const { id, stage, assignedTo, notes, status, pauseReasons, pauseOtherReason } = req.body;
+      if (!id || !stage) {
+        return res.status(400).json({ error: "ID do lead e Etapa são obrigatórios." });
+      }
+
+      const nowISO = new Date().toISOString();
+      const nowFormatted = new Date().toLocaleDateString("pt-BR", {
+        day: "2-digit", month: "long", year: "numeric"
+      }) + " às " + new Date().toLocaleTimeString("pt-BR", {
+        hour: "2-digit", minute: "2-digit"
+      });
+
+      // Update in local backup
+      const localLeads = readLeadsBackup() || [];
+      const leadIndex = localLeads.findIndex((l: any) => l.id === id || l.protocol === id);
+      let updatedLead: any = null;
+
+      if (leadIndex >= 0) {
+        localLeads[leadIndex] = {
+          ...localLeads[leadIndex],
+          stage: stage,
+          status: status || stage,
+          assignedTo: assignedTo !== undefined ? assignedTo : localLeads[leadIndex].assignedTo,
+          notes: notes !== undefined ? notes : localLeads[leadIndex].notes,
+          pauseReasons: pauseReasons !== undefined ? pauseReasons : localLeads[leadIndex].pauseReasons,
+          pauseOtherReason: pauseOtherReason !== undefined ? pauseOtherReason : localLeads[leadIndex].pauseOtherReason,
+          lastUpdated: nowFormatted
+        };
+        updatedLead = localLeads[leadIndex];
+        writeLeadsBackup(localLeads);
+      } else {
+        updatedLead = {
+          id,
+          stage,
+          status: status || stage,
+          assignedTo: assignedTo || "",
+          notes: notes || "",
+          pauseReasons: pauseReasons || [],
+          pauseOtherReason: pauseOtherReason || "",
+          lastUpdated: nowFormatted
+        };
+        localLeads.unshift(updatedLead);
+        writeLeadsBackup(localLeads);
+      }
+
+      // Update in Firestore
+      try {
+        await adminDb.collection("leads").doc(id).set(updatedLead, { merge: true });
+      } catch (fErr) {
+        console.warn("[Firestore Notice] Lead stage update error:", fErr);
+      }
+
+      // Update in Supabase
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          await sb.from("leads").upsert({
+            id: id,
+            status: status || stage,
+            notes: notes || updatedLead.message || "",
+            details: JSON.stringify(updatedLead),
+            created_at: nowISO
+          });
+        } catch (sErr) {
+          console.warn("[Supabase Notice] Lead stage update error:", sErr);
+        }
+      }
+
+      res.json({ success: true, lead: updatedLead });
+    } catch (error) {
+      console.error("Erro ao atualizar etapa do lead:", error);
+      res.status(500).json({ error: "Erro interno ao atualizar etapa do lead." });
+    }
+  });
+
+  // 2c. POST /api/admin/leads/convert-to-client: Fast convert Lead to Registered Client
+  app.post("/api/admin/leads/convert-to-client", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const { leadId, cpf, name, email, phone, service, stage, assignedTo, notes } = req.body;
+      if (!cpf || !name) {
+        return res.status(400).json({ error: "CPF e Nome são obrigatórios para cadastrar o cliente." });
+      }
+
+      const cleanCpf = cpf.replace(/\D/g, "");
+      if (cleanCpf.length < 11) {
+        return res.status(400).json({ error: "CPF deve possuir no mínimo 11 dígitos." });
+      }
+
+      const protocol = `SPA-${cleanCpf.slice(-4)}`;
+      const clientId = `cli-${cleanCpf}`;
+      const nowFormatted = new Date().toLocaleDateString("pt-BR", {
+        day: "2-digit", month: "long", year: "numeric"
+      }) + " às " + new Date().toLocaleTimeString("pt-BR", {
+        hour: "2-digit", minute: "2-digit"
+      });
+
+      const localClients = readClientsDataFile() || [];
+      const existingIdx = localClients.findIndex((c: any) => c.cpf === cleanCpf || c.id === clientId);
+
+      const clientPayload = {
+        id: clientId,
+        cpf: cleanCpf,
+        protocol: protocol,
+        name: name,
+        email: email || "",
+        phone: phone || "",
+        service: service || "Geral",
+        status: "ativo",
+        currentStep: stage || "Atendimento Inicial",
+        assignedTo: assignedTo || "Shafira Nunes / Pablo Gabriel",
+        lastUpdate: nowFormatted,
+        orderInfo: notes || `Cliente cadastrado a partir de lead/solicitação (${protocol})`,
+        documents: existingIdx >= 0 && localClients[existingIdx].documents ? localClients[existingIdx].documents : [],
+        timeline: [
+          ...(existingIdx >= 0 && localClients[existingIdx].timeline ? localClients[existingIdx].timeline : []),
+          {
+            date: nowFormatted,
+            title: "Cliente Cadastrado via CRM / Lead",
+            description: `Cadastro oficializado no sistema. Etapa inicial: ${stage || "Atendimento Inicial"}. Atendente responsável: ${assignedTo || "Shafira Nunes / Pablo Gabriel"}`
+          }
+        ]
+      };
+
+      if (existingIdx >= 0) {
+        localClients[existingIdx] = { ...localClients[existingIdx], ...clientPayload };
+      } else {
+        localClients.unshift(clientPayload);
+      }
+      writeClientsDataFile(localClients);
+
+      // Save to Firestore
+      try {
+        await adminDb.collection("clients").doc(clientId).set(clientPayload, { merge: true });
+      } catch (fErr) {
+        console.warn("[Firestore Notice] Client creation error:", fErr);
+      }
+
+      // Save to Supabase
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          await sb.from("clients").upsert({
+            id: clientId,
+            protocol: protocol,
+            name: name,
+            cpf: cleanCpf,
+            email: email || "",
+            phone: phone || "",
+            service: service || "Geral",
+            status: "ativo",
+            current_step: stage || "Atendimento Inicial",
+            last_update: nowFormatted,
+            order_info: notes || "",
+            timeline: JSON.stringify(clientPayload.timeline),
+            documents: JSON.stringify(clientPayload.documents)
+          });
+        } catch (sErr) {
+          console.warn("[Supabase Notice] Client creation error in Supabase:", sErr);
+        }
+      }
+
+      // Update lead status to 'Cliente Cadastrado'
+      if (leadId) {
+        const localLeads = readLeadsBackup() || [];
+        const leadIdx = localLeads.findIndex((l: any) => l.id === leadId);
+        if (leadIdx >= 0) {
+          localLeads[leadIdx].status = "Cliente Cadastrado";
+          localLeads[leadIdx].stage = stage || localLeads[leadIdx].stage || "Atendimento Inicial";
+          localLeads[leadIdx].assignedTo = assignedTo || localLeads[leadIdx].assignedTo;
+          localLeads[leadIdx].convertedToClientId = clientId;
+          writeLeadsBackup(localLeads);
+        }
+      }
+
+      res.json({ success: true, client: clientPayload });
+    } catch (error) {
+      console.error("Erro ao converter lead em cliente:", error);
+      res.status(500).json({ error: "Erro interno ao converter lead em cliente." });
+    }
+  });
+
+  // 2d. DELETE /api/admin/leads/:id: Delete lead or solicitation permanently
+  app.delete("/api/admin/leads/:id", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente"]), async (req: AuthenticatedRequest, res) => {
+    try {
+      const leadId = req.params.id;
+      if (!leadId) {
+        return res.status(400).json({ error: "ID do lead é obrigatório." });
+      }
+
+      // 1. Remove from local leads backup
+      let localLeads = readLeadsBackup() || [];
+      localLeads = localLeads.filter((l: any) => l.id !== leadId && l.protocol !== leadId);
+      writeLeadsBackup(localLeads);
+
+      // 2. Remove from solicitacoes backup if present
+      const rawSolId = leadId.replace(/^lead-sol-/, "").replace(/^lead-/, "");
+      let localSols = readSolicitacoesBackup() || [];
+      localSols = localSols.filter((s: any) => String(s.id) !== String(rawSolId) && s.protocol !== leadId && `lead-${s.id}` !== leadId);
+      writeSolicitacoesBackup(localSols);
+
+      // 3. Remove from site-data.json if present
+      try {
+        const siteData = readSiteDataFile();
+        if (siteData && Array.isArray(siteData.leads)) {
+          siteData.leads = siteData.leads.filter((l: any) => l.id !== leadId && l.protocol !== leadId);
+          writeSiteDataFile(siteData);
+        }
+      } catch (siteErr) {
+        console.warn("Erro ao atualizar site-data ao excluir lead:", siteErr);
+      }
+
+      // 4. Delete from Firestore
+      try {
+        await adminDb.collection("leads").doc(leadId).delete();
+      } catch (err) {
+        console.warn("[Firestore Warning] Error deleting lead from Firestore:", err);
+      }
+      try {
+        await adminDb.collection("solicitacoes").doc(rawSolId).delete();
+      } catch (err) {
+        console.warn("[Firestore Warning] Error deleting solicitacao from Firestore:", err);
+      }
+
+      // 5. Delete from Supabase if configured
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          await sb.from("leads").delete().or(`id.eq.${leadId},protocol.eq.${leadId}`);
+        } catch (sbErr) {
+          console.warn("[Supabase Warning] Error deleting lead from Supabase:", sbErr);
+        }
+      }
+
+      // Audit Log
+      await createAuditLog(
+        req.user?.uid || "unknown",
+        req.user?.email || "unknown",
+        "DELETE_LEAD",
+        "leads",
+        leadId,
+        { id: leadId }
+      );
+
+      res.json({ success: true, message: "Lead/solicitação excluído com sucesso." });
+    } catch (error) {
+      console.error("Erro ao excluir lead:", error);
+      res.status(500).json({ error: "Erro ao excluir o lead no servidor." });
     }
   });
 
@@ -1000,6 +2013,28 @@ app.use(express.json({ limit: "5mb" }));
         console.warn("[Firestore Warning] Error saving content to Firestore, saved locally instead:", firestoreError);
       }
 
+      // Sync with Supabase if configured
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          await sb.from("site_data").upsert({
+            id: "main",
+            company_name: payload.companyName || payload.company_name || "SP Assessoria",
+            phone: payload.phone || "",
+            email: payload.email || "",
+            hero: payload.hero || null,
+            services: payload.services || null,
+            faqs: payload.faqs || null,
+            blog: payload.blog || null,
+            reviews: payload.reviews || null,
+            config: payload.config || null,
+            updated_at: new Date().toISOString()
+          });
+        } catch (sbErr) {
+          console.warn("[Supabase Warning] Error saving site_data to Supabase:", sbErr);
+        }
+      }
+
       // Record administrative action in Audit Log
       await createAuditLog(
         req.user?.uid || "unknown",
@@ -1017,8 +2052,8 @@ app.use(express.json({ limit: "5mb" }));
     }
   };
 
-  app.post("/api/admin/site-content", requireAuth, requireRole(["admin", "gestor"]), saveSiteContentHandler);
-  app.post("/api/site-data", requireAuth, requireRole(["admin", "gestor"]), saveSiteContentHandler);
+  app.post("/api/admin/site-content", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente"]), saveSiteContentHandler);
+  app.post("/api/site-data", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente"]), saveSiteContentHandler);
 
   // API endpoint for AI assistant chat (Public but disabled by default)
   app.post("/api/chat", rateLimiter(60000, 3), async (req, res) => {
@@ -1124,25 +2159,91 @@ Instruções importantes:
     }
   }
 
-  // 1. GET /api/admin/clients - Retrieve all clients (Admin, Atendente & Consulta)
+  // 1. GET /api/admin/clients - Retrieve all clients merged from Supabase, Firestore, and local backups
   app.get("/api/admin/clients", requireAuth, requireRole(["admin", "gestor", "atendente", "consulta"]), async (req: AuthenticatedRequest, res) => {
     try {
-      let clientsList: any[] = [];
+      const clientsMap = new Map<string, any>();
+
+      // A. Query Supabase if configured
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          const { data: sbClients, error: sbErr } = await sb.from("clients").select("*");
+          if (!sbErr && sbClients && Array.isArray(sbClients)) {
+            for (const item of sbClients) {
+              let timeline = item.timeline;
+              let documents = item.documents;
+
+              if (typeof timeline === 'string') {
+                try { timeline = JSON.parse(timeline); } catch (e) { timeline = []; }
+              }
+              if (typeof documents === 'string') {
+                try { documents = JSON.parse(documents); } catch (e) { documents = []; }
+              }
+
+              const cleanCpf = (item.cpf || "").replace(/\D/g, "");
+              const clientObj = {
+                id: item.id || `cli-${cleanCpf}`,
+                cpf: cleanCpf,
+                protocol: item.protocol || "",
+                name: item.name || "Cliente Sem Nome",
+                email: item.email || "",
+                phone: item.phone || "",
+                service: item.service || "Geral",
+                status: item.status || "ativo",
+                currentStep: item.current_step || item.currentStep || "Em Análise",
+                lastUpdate: item.last_update || item.lastUpdate || new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+                orderInfo: item.order_info || item.orderInfo || "",
+                documents: Array.isArray(documents) ? documents : [],
+                timeline: Array.isArray(timeline) ? timeline : []
+              };
+
+              const key = clientObj.id || clientObj.cpf || clientObj.protocol;
+              if (key) {
+                clientsMap.set(key, clientObj);
+              }
+            }
+          }
+        } catch (sbException) {
+          console.warn("[Supabase Warning] Error fetching clients from Supabase:", sbException);
+        }
+      }
+
+      // B. Query Firestore
       try {
         const clientsSnapshot = await adminDb.collection("clients").get();
         clientsSnapshot.forEach((docSnap) => {
-          clientsList.push(docSnap.data());
+          const data = docSnap.data();
+          if (data) {
+            const cleanCpf = (data.cpf || "").replace(/\D/g, "");
+            const key = data.id || cleanCpf || data.protocol;
+            if (key) {
+              const existing = clientsMap.get(key);
+              clientsMap.set(key, { ...existing, ...data });
+            }
+          }
         });
       } catch (err) {
-        console.warn("[Firestore Warning] Error reading clients from Firestore, falling back to local file:", err);
-      }
-      
-      if (clientsList.length === 0) {
-        clientsList = readClientsDataFile();
+        console.warn("[Firestore Warning] Error reading clients from Firestore:", err);
       }
 
-      // Ensure stable sorting by last update or name
+      // C. Query Local File Backup
+      const localClients = readClientsDataFile() || [];
+      for (const client of localClients) {
+        if (client) {
+          const cleanCpf = (client.cpf || "").replace(/\D/g, "");
+          const key = client.id || cleanCpf || client.protocol;
+          if (key && !clientsMap.has(key)) {
+            clientsMap.set(key, client);
+          }
+        }
+      }
+
+      const clientsList = Array.from(clientsMap.values());
       clientsList.sort((a, b) => (b.name || "").localeCompare(a.name || ""));
+
+      // Keep local file backup updated
+      writeClientsDataFile(clientsList);
 
       res.json(clientsList);
     } catch (error) {
@@ -1151,8 +2252,8 @@ Instruções importantes:
     }
   });
 
-  // 2. POST /api/admin/clients - Create or update client profile (Admin-only)
-  app.post("/api/admin/clients", requireAuth, requireRole(["admin", "gestor"]), async (req: AuthenticatedRequest, res) => {
+  // 2. POST /api/admin/clients - Create or update client profile
+  app.post("/api/admin/clients", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente"]), async (req: AuthenticatedRequest, res) => {
     try {
       const clientData = req.body;
       if (!clientData || !clientData.cpf) {
@@ -1212,6 +2313,31 @@ Instruções importantes:
         console.warn("[Firestore Warning] Error saving client to Firestore, saved locally:", err);
       }
 
+      // Update Supabase if configured
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          await sb.from("clients").upsert({
+            id: clientId,
+            protocol: updatedClient.protocol || `SPA-${cleanCpf.slice(-4)}`,
+            name: updatedClient.name,
+            cpf: cleanCpf,
+            email: updatedClient.email || "",
+            phone: updatedClient.phone || "",
+            service: updatedClient.service || "",
+            status: updatedClient.status || "ativo",
+            current_step: updatedClient.currentStep || "Em Análise",
+            last_update: updatedClient.lastUpdate || "",
+            order_info: updatedClient.orderInfo || "",
+            documents: updatedClient.documents || [],
+            timeline: updatedClient.timeline || [],
+            updated_at: new Date().toISOString()
+          });
+        } catch (sbErr) {
+          console.warn("[Supabase Warning] Error upserting client to Supabase:", sbErr);
+        }
+      }
+
       // Audit Log
       await createAuditLog(
         req.user?.uid || "unknown",
@@ -1229,26 +2355,43 @@ Instruções importantes:
     }
   });
 
-  // 3. DELETE /api/admin/clients/:cpf - Delete client (Admin-only)
-  app.delete("/api/admin/clients/:cpf", requireAuth, requireRole(["admin", "gestor"]), async (req: AuthenticatedRequest, res) => {
+  // 3. DELETE /api/admin/clients/:cpf - Delete client
+  app.delete("/api/admin/clients/:cpf", requireAuth, requireRole(["admin", "gestor", "supervisor", "analista", "atendente"]), async (req: AuthenticatedRequest, res) => {
     try {
-      const cpf = req.params.cpf.replace(/\D/g, "");
-      if (!cpf) {
+      const rawCpf = decodeURIComponent(req.params.cpf || "").trim();
+      const cleanCpf = rawCpf.replace(/\D/g, "");
+      if (!cleanCpf && !rawCpf) {
         return res.status(400).json({ error: "CPF do cliente é requerido." });
       }
 
-      const clientId = `cli-${cpf}`;
+      const clientId = `cli-${cleanCpf}`;
 
       // Update local backup
       let localClients = readClientsDataFile();
-      localClients = localClients.filter((c: any) => c.cpf !== cpf);
+      localClients = localClients.filter((c: any) => {
+        const cClean = (c.cpf || "").replace(/\D/g, "");
+        return cClean !== cleanCpf && c.cpf !== rawCpf && c.id !== clientId;
+      });
       writeClientsDataFile(localClients);
 
       // Update Firestore
       try {
         await adminDb.collection("clients").doc(clientId).delete();
+        if (rawCpf && rawCpf !== cleanCpf) {
+          await adminDb.collection("clients").doc(`cli-${rawCpf}`).delete();
+        }
       } catch (err) {
         console.warn("[Firestore Warning] Error deleting client from Firestore:", err);
+      }
+
+      // Delete from Supabase if configured
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          await sb.from("clients").delete().or(`cpf.eq.${cleanCpf},cpf.eq.${rawCpf},id.eq.${clientId}`);
+        } catch (sbErr) {
+          console.warn("[Supabase Warning] Error deleting client from Supabase:", sbErr);
+        }
       }
 
       // Audit Log
@@ -1258,7 +2401,7 @@ Instruções importantes:
         "DELETE_CLIENT",
         "clients",
         clientId,
-        { cpf }
+        { cpf: cleanCpf || rawCpf }
       );
 
       res.json({ success: true, message: "Cliente excluído com sucesso do sistema." });
@@ -1282,25 +2425,88 @@ Instruções importantes:
       // Determine if searching by CPF or Protocol
       const isCpfSearch = cleanDigits.length === 11 || (cleanDigits.length > 0 && !cleanQuery.startsWith("SP"));
 
-      let allClients: any[] = [];
+      const clientsMap = new Map<string, any>();
+
+      // A. Query Supabase
+      const sb = getServerSupabaseClient();
+      if (sb) {
+        try {
+          const { data: sbClients, error: sbErr } = await sb.from("clients").select("*");
+          if (!sbErr && sbClients && Array.isArray(sbClients)) {
+            for (const item of sbClients) {
+              let timeline = item.timeline;
+              let documents = item.documents;
+
+              if (typeof timeline === 'string') {
+                try { timeline = JSON.parse(timeline); } catch (e) { timeline = []; }
+              }
+              if (typeof documents === 'string') {
+                try { documents = JSON.parse(documents); } catch (e) { documents = []; }
+              }
+
+              const cleanCpf = (item.cpf || "").replace(/\D/g, "");
+              const clientObj = {
+                id: item.id || `cli-${cleanCpf}`,
+                cpf: cleanCpf,
+                protocol: item.protocol || "",
+                name: item.name || "Cliente Sem Nome",
+                email: item.email || "",
+                phone: item.phone || "",
+                service: item.service || "Geral",
+                status: item.status || "ativo",
+                currentStep: item.current_step || item.currentStep || "Em Análise",
+                lastUpdate: item.last_update || item.lastUpdate || "",
+                orderInfo: item.order_info || item.orderInfo || "",
+                documents: Array.isArray(documents) ? documents : [],
+                timeline: Array.isArray(timeline) ? timeline : []
+              };
+
+              const key = clientObj.id || clientObj.cpf || clientObj.protocol;
+              if (key) clientsMap.set(key, clientObj);
+            }
+          }
+        } catch (sbErr) {
+          console.warn("[Supabase Warning] Tracking search error in Supabase:", sbErr);
+        }
+      }
+
+      // B. Query Firestore
       try {
         const clientsSnapshot = await adminDb.collection("clients").get();
         clientsSnapshot.forEach((docSnap) => {
-          allClients.push(docSnap.data());
+          const data = docSnap.data();
+          if (data) {
+            const cleanCpf = (data.cpf || "").replace(/\D/g, "");
+            const key = data.id || cleanCpf || data.protocol;
+            if (key) {
+              const existing = clientsMap.get(key);
+              clientsMap.set(key, { ...existing, ...data });
+            }
+          }
         });
       } catch (err) {
-        console.warn("[Firestore Warning] Error loading clients for tracker query, using backup:", err);
+        console.warn("[Firestore Warning] Error loading clients for tracker query:", err);
       }
 
-      if (allClients.length === 0) {
-        allClients = readClientsDataFile();
+      // C. Query Local File
+      const localClients = readClientsDataFile() || [];
+      for (const client of localClients) {
+        if (client) {
+          const cleanCpf = (client.cpf || "").replace(/\D/g, "");
+          const key = client.id || cleanCpf || client.protocol;
+          if (key && !clientsMap.has(key)) {
+            clientsMap.set(key, client);
+          }
+        }
       }
+
+      const allClients = Array.from(clientsMap.values());
 
       let matchedClient: any = null;
       if (isCpfSearch) {
-        matchedClient = allClients.find((c: any) => c.cpf.replace(/\D/g, "") === cleanDigits);
+        matchedClient = allClients.find((c: any) => c.cpf && c.cpf.replace(/\D/g, "") === cleanDigits);
       } else {
-        matchedClient = allClients.find((c: any) => c.protocol.trim().toUpperCase() === cleanQuery);
+        matchedClient = allClients.find((c: any) => c.protocol && c.protocol.trim().toUpperCase() === cleanQuery);
       }
 
       if (!matchedClient) {
