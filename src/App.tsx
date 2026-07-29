@@ -39,9 +39,9 @@ import { WhatsAppLeadModal } from "./components/WhatsAppLeadModal";
 import { AdminDashboard } from "./components/AdminDashboard";
 import { PublicRequestForm } from "./components/PublicRequestForm";
 import { Logo } from "./components/Logo";
+import { supabase } from "./lib/supabase";
 import defaultSiteData from "./site-data.json";
 import { ServiceItem, BlogPost, FAQItem, Review, ProcessStatus, TimelineStep } from "./types";
-import { auth } from "./firebase";
 
 // Static content for the landing page
 const SERVICES: Record<"inss" | "transito" | "administrativo", ServiceItem> = {
@@ -276,9 +276,21 @@ export default function App() {
   });
   const [adminOpen, setAdminOpen] = useState(false);
 
+  const getAuthToken = async (): Promise<string> => {
+    try {
+      if (supabase) {
+        const { data } = await supabase.auth.getSession();
+        if (data?.session?.access_token) {
+          return data.session.access_token;
+        }
+      }
+    } catch (_e) {}
+    return localStorage.getItem("sp_session_token") || "";
+  };
+
   const fetchSiteData = async () => {
     try {
-      const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : (localStorage.getItem("custom_session_token") || "");
+      const idToken = await getAuthToken();
       const headers: Record<string, string> = {};
       if (idToken) {
         headers["Authorization"] = `Bearer ${idToken}`;
@@ -304,7 +316,7 @@ export default function App() {
       localStorage.setItem("sp_site_data", JSON.stringify(newData));
       setSiteData(newData);
       
-      const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : "";
+      const idToken = await getAuthToken();
       const response = await fetch("/api/site-data", {
         method: "POST",
         headers: {
@@ -316,7 +328,7 @@ export default function App() {
       if (response.ok) {
         return true;
       }
-      return true; // Return true because it's locally saved
+      return true;
     } catch (error) {
       console.warn("Erro ao salvar dados no servidor, mantendo localmente:", error);
       return true; // Return true because it's locally saved

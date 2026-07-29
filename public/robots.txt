@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /login
+Disallow: /redefinir-senha
+Disallow: /api/
+
+Sitemap: https://sprecursosadm.com.br/sitemap.xml

@@ -1,5 +1,4 @@
 // Google Workspace Integration API wrapper utilizing REST endpoints for SP Assessoria
-import { OperationType, handleFirestoreError } from "../firebase";
 
 let cachedToken: string | null = null;
 

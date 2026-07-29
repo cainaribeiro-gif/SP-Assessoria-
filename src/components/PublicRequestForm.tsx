@@ -15,9 +15,6 @@ import {
   Loader2,
   HelpCircle
 } from "lucide-react";
-import { db, storage } from "../firebase";
-import { doc, setDoc } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 interface PublicRequestFormProps {
   onSuccessQueryProtocol?: (protocol: string) => void;
@@ -171,37 +168,34 @@ export function PublicRequestForm({ onSuccessQueryProtocol }: PublicRequestFormP
       const protocol = `SPA-${year}-${randomCode}`;
       const docId = `sol-${Date.now()}`;
 
-      // 2. Upload Attachments if present (with 4s safety timeout race per file)
+      // 2. Process Attachments if present
       const attachmentsMetadata: any[] = [];
       if (files.length > 0) {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
-          setUploadProgress(`Enviando anexo ${i + 1} de ${files.length} (${file.name})...`);
+          setUploadProgress(`Processando anexo ${i + 1} de ${files.length} (${file.name})...`);
           try {
-            const storagePath = `solicitacoes/${protocol}/${Date.now()}_${file.name}`;
-            const storageRef = ref(storage, storagePath);
-            const uploadPromise = uploadBytes(storageRef, file);
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("Storage timeout")), 4000)
-            );
-            await Promise.race([uploadPromise, timeoutPromise]);
-            const downloadUrl = await getDownloadURL(storageRef);
+            const dataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(file);
+            });
             attachmentsMetadata.push({
               name: file.name,
-              url: downloadUrl,
+              url: dataUrl.length < 500000 ? dataUrl : "#", // Keep inline if reasonable size
               size: file.size,
               type: file.type || "application/octet-stream",
               uploadedAt: new Date().toISOString()
             });
-          } catch (storageErr) {
-            console.warn("[Storage Warning] Fallback metadata for storage upload:", storageErr);
+          } catch (fileErr) {
+            console.warn("[File Warning] Metadata fallback for attachment:", fileErr);
             attachmentsMetadata.push({
               name: file.name,
               url: "#",
               size: file.size,
               type: file.type || "application/octet-stream",
-              uploadedAt: new Date().toISOString(),
-              offlineNote: "Anexo registrado em fila de envio"
+              uploadedAt: new Date().toISOString()
             });
           }
         }
@@ -246,7 +240,7 @@ export function PublicRequestForm({ onSuccessQueryProtocol }: PublicRequestFormP
         updatedAt: nowISO
       };
 
-      // 4. Send request to backend API endpoint /api/solicitacoes (with 8s timeout controller)
+      // 4. Send request to backend API endpoint /api/solicitacoes
       let apiSuccess = false;
       try {
         const controller = new AbortController();
@@ -277,22 +271,6 @@ export function PublicRequestForm({ onSuccessQueryProtocol }: PublicRequestFormP
       } catch (fetchErr) {
         console.warn("[API Network Notice] API endpoint call error, falling back:", fetchErr);
       }
-
-      // 5. Asynchronous background client sync (does NOT block completion)
-      setDoc(doc(db, "solicitacoes", docId), requestData).catch(() => {});
-      setDoc(doc(db, "clients", cleanCpf), {
-        cpf: formatCpf(cleanCpf),
-        name: clientName.trim(),
-        email: clientEmail.trim().toLowerCase(),
-        phone: clientPhone.trim(),
-        service: service,
-        protocol: protocol,
-        currentStep: "Análise Inicial de Solicitação",
-        lastUpdate: nowFormatted,
-        orderInfo: description.trim(),
-        documents: attachmentsMetadata,
-        timeline: requestData.timeline
-      }).catch(() => {});
 
       // 6. Local Storage backup for guaranteed data persistence
       try {

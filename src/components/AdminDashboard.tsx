@@ -1,13 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  signOut,
-  signInWithEmailAndPassword,
-  sendPasswordResetEmail
-} from "firebase/auth";
-import { auth, storage } from "../firebase";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getSupabaseClient } from "../lib/supabase";
 import { 
   setWorkspaceToken, 
   getWorkspaceToken, 
@@ -387,7 +379,7 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   
   // Google Workspace state variables
   const [isGoogleConnected, setIsGoogleConnected] = useState(isWorkspaceConnected());
-  const [googleUserEmail, setGoogleUserEmail] = useState<string | null>(auth.currentUser?.email || null);
+  const [googleUserEmail, setGoogleUserEmail] = useState<string | null>(localStorage.getItem("sp_session_email") || null);
   const [spreadsheetUrl, setSpreadsheetUrl] = useState<string>(localStorage.getItem("sp_leads_spreadsheet_id") ? `https://docs.google.com/spreadsheets/d/${localStorage.getItem("sp_leads_spreadsheet_id")}/edit` : "");
   const [syncingSheets, setSyncingSheets] = useState(false);
   
@@ -433,10 +425,16 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   const [loadingClients, setLoadingClients] = useState(false);
 
   const getAuthToken = async (): Promise<string> => {
-    if (auth.currentUser) {
-      return await auth.currentUser.getIdToken();
-    }
-    return localStorage.getItem("custom_session_token") || "";
+    try {
+      const sb = getSupabaseClient();
+      if (sb) {
+        const { data } = await sb.auth.getSession();
+        if (data?.session?.access_token) {
+          return data.session.access_token;
+        }
+      }
+    } catch (_e) {}
+    return localStorage.getItem("sp_session_token") || "";
   };
   
   // Edit forms states
@@ -889,17 +887,17 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     }
     setLoginError("");
     try {
-      await sendPasswordResetEmail(auth, username.trim());
-      setLoginError("E-mail de recuperação enviado com sucesso! Verifique sua caixa de entrada.");
+      const sb = getSupabaseClient();
+      if (sb) {
+        const { error } = await sb.auth.resetPasswordForEmail(username.trim());
+        if (error) throw error;
+        setLoginError("Instruções de recuperação enviadas via Supabase! Verifique seu e-mail.");
+      } else {
+        setLoginError("Redefinição de senha ativada. Entre em contato com a administração do sistema para redefinir sua senha mestra.");
+      }
     } catch (err: any) {
       console.error(err);
-      let errMsg = "Erro ao enviar e-mail de recuperação.";
-      if (err.code === "auth/user-not-found" || err.code === "auth/invalid-email") {
-        errMsg = "E-mail de usuário inválido ou não cadastrado.";
-      } else {
-        errMsg = err.message || String(err);
-      }
-      setLoginError(errMsg);
+      setLoginError(err.message || "Erro ao solicitar redefinição de senha.");
     }
   };
 
@@ -907,84 +905,33 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
   useEffect(() => {
     setIsGoogleConnected(isWorkspaceConnected());
 
-    // Connect Firebase Auth state change listener
-    const unsubscribe = auth.onAuthStateChanged(async (user) => {
-      if (user) {
-        const userEmail = (user.email || "").toLowerCase();
-        const allowedAdminEmails = [
-          "cainapribeiro@gmail.com",
-          "atendimento.spassessoria@gmail.com",
-          "atendimento.spassessoria@gamail.com",
-          "atendimento@sprecursosadm.com.br"
-        ];
+    const checkSession = async () => {
+      const spToken = localStorage.getItem("sp_session_token");
+      const spEmail = localStorage.getItem("sp_session_email") || "";
+
+      if (spToken) {
         try {
-          const idToken = await user.getIdToken();
           const response = await fetch("/api/admin/profile", {
             headers: {
-              "Authorization": `Bearer ${idToken}`
+              "Authorization": `Bearer ${spToken}`
             }
           });
           if (response.ok) {
             const profile = await response.json();
-            const allowedRoles = ["admin", "administrador", "gestor", "supervisor", "analista", "atendente", "consulta", "financeiro", "marketing"];
-            if (profile.active && (allowedRoles.includes(profile.role) || allowedAdminEmails.includes(userEmail))) {
-              setUserRole(profile.role || "admin");
-              setIsLoggedIn(true);
-              setGoogleUserEmail(user.email || "");
-              fetchLeads(idToken);
-              return;
-            }
-          }
-
-          if (allowedAdminEmails.includes(userEmail)) {
-            setUserRole("admin");
             setIsLoggedIn(true);
-            setGoogleUserEmail(user.email || "");
-            fetchLeads(idToken);
+            setUserRole(profile.role || "admin");
+            setGoogleUserEmail(profile.email || spEmail);
+            fetchLeads(spToken);
             return;
           }
-
-          setLoginError("Acesso negado: Perfil inativo ou sem permissão de acesso ao painel.");
-          setIsLoggedIn(false);
-          await signOut(auth);
         } catch (err) {
-          console.error("Erro ao carregar perfil do usuário:", err);
-          if (allowedAdminEmails.includes(userEmail)) {
-            setUserRole("admin");
-            setIsLoggedIn(true);
-            setGoogleUserEmail(user.email || "");
-          } else {
-            setIsLoggedIn(false);
-          }
+          console.error("Erro ao verificar sessão de login:", err);
         }
-      } else {
-        // Fallback checks for custom direct server session
-        const customToken = localStorage.getItem("custom_session_token");
-        const customEmail = localStorage.getItem("custom_session_email");
-        if (customToken && customEmail) {
-          try {
-            const response = await fetch("/api/admin/profile", {
-              headers: {
-                "Authorization": `Bearer ${customToken}`
-              }
-            });
-            if (response.ok) {
-              const profile = await response.json();
-              setIsLoggedIn(true);
-              setGoogleUserEmail(customEmail);
-              fetchLeads(customToken);
-              return;
-            }
-          } catch (err) {
-            console.error("Erro ao verificar sessão customizada:", err);
-          }
-          localStorage.removeItem("custom_session_token");
-          localStorage.removeItem("custom_session_email");
-        }
-        setIsLoggedIn(false);
       }
-    });
-    return () => unsubscribe();
+      setIsLoggedIn(false);
+    };
+
+    checkSession();
   }, []);
 
   // Automatic real-time data sync (every 5 seconds and on window focus)
@@ -1021,60 +968,17 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
 
   const handleGoogleLogin = async () => {
     setLoginError("");
-    const provider = new GoogleAuthProvider();
-    const allowedAdminEmails = [
-      "cainapribeiro@gmail.com",
-      "atendimento.spassessoria@gmail.com",
-      "atendimento.spassessoria@gamail.com",
-      "atendimento@sprecursosadm.com.br"
-    ];
-
     try {
-      const result = await signInWithPopup(auth, provider);
-      const user = result.user;
-      const userEmail = (user.email || "").toLowerCase();
-      const idToken = await user.getIdToken();
-
-      const response = await fetch("/api/admin/profile", {
-        headers: {
-          "Authorization": `Bearer ${idToken}`
-        }
-      });
-
-      if (response.ok) {
-        const profile = await response.json();
-        const allowedRoles = ["admin", "administrador", "gestor", "supervisor", "analista", "atendente", "consulta", "financeiro", "marketing"];
-        if (profile.active && (allowedRoles.includes(profile.role) || allowedAdminEmails.includes(userEmail))) {
-          setUserRole(profile.role || "admin");
-          setIsLoggedIn(true);
-          setGoogleUserEmail(user.email || "");
-          fetchLeads(idToken);
-          return;
-        }
+      const sb = getSupabaseClient();
+      if (sb) {
+        const { error } = await sb.auth.signInWithOAuth({ provider: 'google' });
+        if (error) throw error;
+      } else {
+        setLoginError("Login do Google via Supabase não está configurado. Utilize o login por E-mail e Senha Mestra abaixo.");
       }
-
-      if (allowedAdminEmails.includes(userEmail)) {
-        setUserRole("admin");
-        setIsLoggedIn(true);
-        setGoogleUserEmail(user.email || "");
-        fetchLeads(idToken);
-        return;
-      }
-
-      setLoginError(`Acesso negado: O e-mail (${userEmail}) não possui permissão de administrador.`);
-      await signOut(auth);
     } catch (err: any) {
       console.error("Erro na autenticação do Google:", err);
-      if (err.code === "auth/unauthorized-domain" || err?.message?.includes("unauthorized-domain")) {
-        const currentDomain = window.location.hostname;
-        setLoginError(
-          `Domínio não autorizado pelo Firebase (${currentDomain}). Para habilitar o login do Google neste ambiente, adicione '${currentDomain}' aos Domínios Autorizados no Console do Firebase (Authentication > Configurações > Domínios autorizados). Ou acesse diretamente pelo formulário de E-mail e Senha abaixo.`
-        );
-      } else if (err.code === "auth/popup-closed-by-user") {
-        setLoginError("Login cancelado: A janela de autenticação foi fechada.");
-      } else {
-        setLoginError("Erro na autenticação com o Google: " + (err.message || String(err)));
-      }
+      setLoginError(err.message || "Erro ao conectar com o Google.");
     }
   };
 
@@ -1091,90 +995,34 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     }
 
     try {
-      let idToken = "";
-      let profile = null;
-      let isCustomSession = false;
+      const loginResponse = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: normEmail, password: normPassword })
+      });
 
-      try {
-        const userCredential = await signInWithEmailAndPassword(auth, normEmail, normPassword);
-        const user = userCredential.user;
-        idToken = await user.getIdToken();
-      } catch (fbAuthErr: any) {
-        console.warn("Firebase Auth falhou ou indisponível, tentando login direto do servidor:", fbAuthErr);
-        
-        // Tenta autenticação direta pelo servidor com senha mestra
-        const loginResponse = await fetch("/api/admin/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: normEmail, password: normPassword })
-        });
-        
-        if (loginResponse.ok) {
-          const loginData = await loginResponse.json();
-          idToken = loginData.token;
-          profile = loginData.profile;
-          isCustomSession = true;
-        } else {
-          // Se falhar também na senha mestra, gera erro apropriado
-          const errData = await loginResponse.json().catch(() => ({}));
-          const errMsg = errData.error || "E-mail ou senha incorretos.";
-          throw new Error(errMsg);
-        }
-      }
+      if (loginResponse.ok) {
+        const loginData = await loginResponse.json();
+        const idToken = loginData.token;
+        const profile = loginData.profile;
 
-      // Se autenticado via Firebase, busca o perfil pelo servidor
-      if (!isCustomSession && idToken) {
-        const response = await fetch("/api/admin/profile", {
-          headers: {
-            "Authorization": `Bearer ${idToken}`
-          }
-        });
+        localStorage.setItem("sp_session_token", idToken);
+        localStorage.setItem("sp_session_email", normEmail);
 
-        if (response.ok) {
-          profile = await response.json();
-        } else {
-          setLoginError("Acesso negado: Perfil não registrado ou inativo no banco de dados.");
-          await signOut(auth);
-          return;
-        }
-      }
-
-      const allowedRoles = ["admin", "administrador", "gestor", "supervisor", "analista", "atendente", "consulta", "financeiro", "marketing"];
-      if (profile && profile.active && allowedRoles.includes(profile.role)) {
         setUserRole(profile.role || "admin");
         setIsLoggedIn(true);
         setGoogleUserEmail(profile.email || normEmail);
         setUsername("");
         setPassword("");
 
-        if (isCustomSession) {
-          localStorage.setItem("custom_session_token", idToken);
-          localStorage.setItem("custom_session_email", normEmail);
-        } else {
-          localStorage.removeItem("custom_session_token");
-          localStorage.removeItem("custom_session_email");
-        }
-
         fetchLeads(idToken);
       } else {
-        setLoginError("Acesso negado: Perfil inativo ou sem permissão de acesso ao painel.");
-        if (!isCustomSession) {
-          await signOut(auth);
-        }
+        const errData = await loginResponse.json().catch(() => ({}));
+        setLoginError(errData.error || "E-mail ou senha incorretos.");
       }
     } catch (err: any) {
       console.error(err);
-      let errMsg = "Erro de autenticação.";
-      if (err.message) {
-        errMsg = err.message;
-      } else if (err.code === "auth/user-not-found" || err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
-        errMsg = "E-mail ou senha incorretos.";
-      } else if (err.code === "auth/invalid-email") {
-        errMsg = "E-mail inválido.";
-      } else {
-        errMsg = err.message || String(err);
-      }
-      setLoginError(errMsg);
+      setLoginError("Erro na autenticação com o servidor.");
     }
   };
 
@@ -1183,12 +1031,14 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
     setIsGoogleConnected(false);
     setGoogleUserEmail(null);
     setIsLoggedIn(false);
-    localStorage.removeItem("custom_session_token");
-    localStorage.removeItem("custom_session_email");
+    localStorage.removeItem("sp_session_token");
+    localStorage.removeItem("sp_session_email");
+    localStorage.removeItem("sp_session_token");
     try {
-      await signOut(auth);
+      const sb = getSupabaseClient();
+      if (sb) await sb.auth.signOut();
     } catch (err) {
-      console.warn("Erro ao deslogar do Firebase:", err);
+      console.warn("Erro ao deslogar do Supabase:", err);
     }
   };
 
@@ -1637,25 +1487,16 @@ export function AdminDashboard({ isOpen, onClose, siteData, onDataUpdate }: Admi
 
         let downloadUrl = "";
         try {
-          const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-          const storagePath = `clientes/${editingClient.cpf || "geral"}/${Date.now()}_${cleanFileName}`;
-          const storageRef = ref(storage, storagePath);
-          
-          const uploadPromise = uploadBytes(storageRef, file);
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Timeout storage")), 8000)
-          );
-          await Promise.race([uploadPromise, timeoutPromise]);
-          downloadUrl = await getDownloadURL(storageRef);
-        } catch (err) {
-          console.warn("Upload direto para Firebase Storage falhou, utilizando fallback local/base64:", err);
-          if (file.size <= 4 * 1024 * 1024) {
-            downloadUrl = await new Promise<string>((resolve) => {
+          if (file.size <= 10 * 1024 * 1024) {
+            downloadUrl = await new Promise<string>((resolve, reject) => {
               const reader = new FileReader();
               reader.onloadend = () => resolve(reader.result as string);
+              reader.onerror = reject;
               reader.readAsDataURL(file);
             });
           }
+        } catch (err) {
+          console.warn("Processamento do arquivo falhou:", err);
         }
 
         uploadedDocs.push({
